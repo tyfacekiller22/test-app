@@ -37,6 +37,17 @@
         </button>
       </header>
       <main class="home-main">
+        <section class="pod-card" id="pod-card" aria-live="polite">
+          <div class="pod-row">
+            <span class="pod-dot" id="pod-dot"></span>
+            <div class="pod-text">
+              <div class="pod-title" id="pod-title">Pod</div>
+              <div class="pod-sub" id="pod-sub"></div>
+            </div>
+            <button class="pod-btn" id="pod-btn" hidden>Start</button>
+          </div>
+          <div class="pod-meta" id="pod-meta"></div>
+        </section>
         <ul id="chat-list" class="chat-list"></ul>
         <div id="home-empty" class="empty" hidden>
           <p class="empty-title">No chats yet</p>
@@ -66,6 +77,15 @@
           <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
         </button>
       </header>
+
+      <div class="autooff-banner" id="autooff-banner" role="status" hidden>
+        <span id="autooff-text">Auto-off soon</span>
+        <button id="keep-on">Keep on</button>
+      </div>
+      <div class="autooff-banner off" id="pod-off-banner" role="status" hidden>
+        <span id="pod-off-text">The pod is off.</span>
+        <button id="banner-start">Start</button>
+      </div>
 
       <main id="messages" class="messages" aria-live="polite"></main>
 

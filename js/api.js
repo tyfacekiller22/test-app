@@ -71,6 +71,7 @@ export async function streamChat(settings, messages, { onText, signal, stop = []
   const decoder = new TextDecoder();
   let buffer = '';
   let text = '';
+  let finishReason = null; // 'stop' = finished naturally, 'length' = hit the length limit
   try {
     for (;;) {
       const { value, done } = await reader.read();
@@ -85,6 +86,7 @@ export async function streamChat(settings, messages, { onText, signal, stop = []
         if (data === '[DONE]') continue;
         try {
           const json = JSON.parse(data);
+          if (json.choices?.[0]?.finish_reason) finishReason = json.choices[0].finish_reason;
           const piece = json.choices?.[0]?.delta?.content;
           if (piece) {
             text += piece;
@@ -94,10 +96,10 @@ export async function streamChat(settings, messages, { onText, signal, stop = []
       }
     }
   } catch (e) {
-    if (e.name === 'AbortError') return text; // keep whatever arrived before Stop
+    if (e.name === 'AbortError') return { text, finishReason: 'aborted' }; // keep whatever arrived before Stop
     throw new ApiError('The connection dropped mid-reply.', 'network');
   }
-  return text;
+  return { text, finishReason };
 }
 
 // Tells the pod to stop generating (used together with aborting the request).

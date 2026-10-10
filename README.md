@@ -21,8 +21,11 @@ Chats, characters, your pod address and password are stored only on your phone.
 - Settings: pod address + password with a connection test, global instructions,
   narrator default, banned phrases, model settings (temperature, min-p, DRY, XTC…)
 
-Coming in later stages: character/situation libraries and imports (2), pod start/stop,
-auto-shutdown and a permanent pod (3), memory summaries, pinned memories, generated
+Stage 3 (pod control): Start/Stop on the main screen, "Waking up…" while the model loads,
+auto-off after 15 idle minutes or 3 hours (runs in a free Cloudflare Worker, see worker/SETUP.md),
+a 2-minute warning banner with Keep on, and a monthly spending estimate.
+
+Coming in later stages: character/situation libraries (2), memory summaries, pinned memories, generated
 details, tech support helper, backups and spending (4).
 
 ## Files
@@ -36,6 +39,9 @@ js/defaults.js        default instructions, banned phrases, sampler values, exam
 js/store.js           saves data on the device
 js/format.js          turns *actions* into italics, safely
 js/importer.js        reads Perchance exports and character cards
+js/pod.js             start/stop/status via your Cloudflare Worker
+worker/worker.js      the Cloudflare Worker (pod control + auto-off)
+worker/SETUP.md       how to set up the Worker
 sw.js                 lets it run as a home-screen app
 manifest.webmanifest  app name and icons
 icons/                app icons

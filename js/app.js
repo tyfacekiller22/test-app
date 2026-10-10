@@ -4,8 +4,9 @@
 import * as store from './store.js';
 import { DEFAULT_SETTINGS, EXAMPLE_CHAT, SETTINGS_VERSION } from './defaults.js';
 import { streamChat, abortGeneration, testConnection, ApiError } from './api.js';
-import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs } from './prompt.js';
+import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs, trimIncomplete } from './prompt.js';
 import { parseImport } from './importer.js';
+import { podControlEnabled, getStatus, startPod, stopPod, keepAlive, recordSession, monthTotal, fmtDuration } from './pod.js';
 import { renderText, escapeHtml, timeAgo } from './format.js';
 import { $, uid, toast, openSheet, avatarHtml, avatarInner, onLongPress } from './ui.js';
 import * as library from './library.js';
@@ -37,14 +38,16 @@ async function loadAll() {
   const saved = await store.get('settings');
   settings = { ...DEFAULT_SETTINGS, ...(saved || {}) };
   // Update older saved settings to the new shorter-reply defaults (keeps anything you changed).
-  if (saved && (saved.settingsVersion || 1) < 2) {
-    if (saved.maxReplyTokens === 300) settings.maxReplyTokens = 200;
-    if ((saved.globalInstructions || '').includes('usually 1–3 short paragraphs')) {
-      settings.globalInstructions = saved.globalInstructions.replace(
-        'usually 1–3 short paragraphs. Go longer only when the moment calls for it.',
-        'one or two short paragraphs at most.'
-      );
-    }
+  const oldVersion = saved ? saved.settingsVersion || 1 : SETTINGS_VERSION;
+  if (oldVersion < 2 && (saved.globalInstructions || '').includes('usually 1–3 short paragraphs')) {
+    settings.globalInstructions = saved.globalInstructions.replace(
+      'usually 1–3 short paragraphs. Go longer only when the moment calls for it.',
+      'one or two short paragraphs at most.'
+    );
+  }
+  // v3: the token limit is now only a safety net (it was cutting replies off mid-sentence).
+  if (oldVersion < 3 && [200, 300].includes(saved.maxReplyTokens)) settings.maxReplyTokens = 400;
+  if (oldVersion < SETTINGS_VERSION) {
     settings.settingsVersion = SETTINGS_VERSION;
     await saveSettings();
   }
@@ -77,6 +80,7 @@ function route() {
     current = null;
     renderHome();
     show('home');
+    if (typeof renderPod === 'function') { renderPod(); refreshPod().then(schedulePoll); }
   }
 }
 window.addEventListener('hashchange', route);
@@ -749,8 +753,9 @@ function setGenerating(on) {
 
 async function stopGenerating() {
   if (!gen) return;
+  gen.userStopped = true;
   gen.controller.abort();
-  abortGeneration(settings);
+  abortGeneration(apiSettings());
 }
 
 /**
@@ -758,6 +763,10 @@ async function stopGenerating() {
  */
 async function generate(mode, opts = {}) {
   if (gen || !current) return;
+  if (podControlEnabled(settings) && !podState?.ready) {
+    toast(podState ? 'The pod is still waking up. Try again in a moment.' : 'The pod is off. Tap Start in the banner above.');
+    return;
+  }
   const chat = current;
   const msgs = chat.messages;
   let target = null;       // message being written into
@@ -788,14 +797,14 @@ async function generate(mode, opts = {}) {
   const maxP = apiMode === 'reply' ? Number(settings.maxParagraphs) || 0 : 0;
   let text = '';
   try {
-    text = await streamChat(settings, messages, {
+    ({ text } = await streamChat(apiSettings(), messages, {
       signal: controller.signal,
       stop,
       onText: (t) => {
         // Reply too long: stop as soon as an extra paragraph starts.
         if (maxP && paragraphs(t).length > maxP && !controller.signal.aborted) {
           controller.abort();
-          abortGeneration(settings);
+          abortGeneration(apiSettings());
           t = cutParagraphs(t, maxP);
         }
         if (current !== chat) return;
@@ -806,12 +815,15 @@ async function generate(mode, opts = {}) {
           box.value = (before ? before + '\n' : '') + t;
         }
       },
-    });
+    }));
   } catch (e) {
     if (!(e instanceof ApiError && e.kind === 'aborted')) toast(e.message || 'Something went wrong.');
   }
 
   text = cutParagraphs(tidy(text, chat, apiMode), maxP);
+  // Cut off by the length limit? End on the last complete sentence instead.
+  // (If you pressed Stop yourself, the text is left exactly as it was.)
+  if (!gen.userStopped) text = trimIncomplete(text);
   if (target) {
     if (text) {
       target.versions[target.vi] = text;
@@ -917,7 +929,7 @@ $('#chat-back').addEventListener('click', () => (location.hash = '#/'));
 // ---------- App settings ----------
 const NUM_FIELDS = [
   ['maxParagraphs', 'Max paragraphs per reply', 'Replies stop after this many. 0 = no limit.'],
-  ['maxReplyTokens', 'Max reply length (tokens)', 'Hard limit. 200 ≈ two short paragraphs.'],
+  ['maxReplyTokens', 'Max reply length (tokens)', 'Safety net only. Too low and replies get cut off. 400 is a good value.'],
   ['contextSize', 'Memory size (tokens)', "Must match --contextsize on the pod."],
   ['temperature', 'Temperature', 'Creativity. Around 1.0; below 0.7 gets flat.'],
   ['minP', 'Min-P', 'Cuts unlikely words. 0.05 is a good start.'],
@@ -935,12 +947,26 @@ function renderSettings() {
   const v = (k) => escapeHtml(String(settings[k] ?? ''));
   $('#settings-form').innerHTML = `
     <div class="group">
+      <h2>Pod control (start/stop from the app)</h2>
+      <div class="field"><label for="s-workerUrl">Worker address</label>
+        <input id="s-workerUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://companion.yourname.workers.dev" value="${v('workerUrl')}">
+        <p class="hint">Your Cloudflare Worker. It starts/stops the pod and runs the auto-off. See worker/SETUP.md.</p></div>
+      <div class="field"><label for="s-appKey">App key</label>
+        <input id="s-appKey" type="password" autocomplete="off" value="${v('appKey')}">
+        <p class="hint">The APP_KEY you set in the Worker.</p></div>
+      <div class="field"><label for="s-modelUrl">Model download link</label>
+        <input id="s-modelUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" value="${v('modelUrl')}">
+        <p class="hint">A .gguf link. Change this to try a different model.</p></div>
+      <div class="row"><button class="btn-secondary" id="test-worker">Test Worker</button><span class="status" id="worker-status"></span></div>
+    </div>
+    <div class="group">
       <h2>Your pod</h2>
-      <div class="field"><label for="s-podUrl">Pod address</label>
-        <input id="s-podUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://xxxxxxxx-5001.proxy.runpod.net" value="${v('podUrl')}">
-        <p class="hint">In Runpod: your pod → Connect → right-click the port 5001 link and copy it.</p></div>
       <div class="field"><label for="s-password">Pod password</label>
-        <input id="s-password" type="password" autocomplete="off" value="${v('password')}"></div>
+        <input id="s-password" type="password" autocomplete="off" value="${v('password')}">
+        <p class="hint">Any password. With pod control, every new pod is started with it.</p></div>
+      <div class="field"><label for="s-podUrl">Pod address (only without pod control)</label>
+        <input id="s-podUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://xxxxxxxx-5001.proxy.runpod.net" value="${v('podUrl')}">
+        <p class="hint">With pod control this is filled in automatically.</p></div>
       <div class="row"><button class="btn-secondary" id="test-conn">Test connection</button><span class="status" id="conn-status"></span></div>
     </div>
     <div class="group">
@@ -991,15 +1017,35 @@ function renderSettings() {
     const st = $('#conn-status');
     st.className = 'status';
     st.textContent = 'Checking…';
-    const r = await testConnection(settings);
+    const r = await testConnection(apiSettings());
     st.className = 'status ' + (r.ok ? 'ok' : 'bad');
     st.textContent = r.message;
   };
   $('#b-download').onclick = () => downloadBackup($('#b-chats').checked, $('#b-password').value);
   $('#b-restore').onclick = () => $('#import-file').click();
+
+  $('#test-worker').onclick = async () => {
+    const st = $('#worker-status');
+    if (!podControlEnabled(settings)) { st.className = 'status bad'; st.textContent = 'Fill in the Worker address and app key first.'; return; }
+    st.className = 'status';
+    st.textContent = 'Checking…';
+    try {
+      const r = await getStatus(settings);
+      st.className = 'status ok';
+      st.textContent = 'Connected to your Worker. Pod: ' + (r.pod ? r.pod.status.toLowerCase() : 'off') + '.';
+      applyPodStatus(r.pod);
+    } catch (e) {
+      st.className = 'status bad';
+      st.textContent = e.message;
+    }
+  };
   $('#reset-settings').onclick = async () => {
     if (!confirm('Reset instructions, banned phrases and model settings to the defaults?')) return;
-    settings = { ...DEFAULT_SETTINGS, podUrl: settings.podUrl, password: settings.password };
+    settings = {
+      ...DEFAULT_SETTINGS,
+      podUrl: settings.podUrl, password: settings.password,
+      workerUrl: settings.workerUrl, appKey: settings.appKey, modelUrl: settings.modelUrl,
+    };
     await saveSettings();
     renderSettings();
     toast('Settings reset.');
@@ -1096,6 +1142,152 @@ function confirmRestore(b) {
 
 library.initLibrary({ onStartChat: (charId) => { location.hash = '#/'; newChatSheet({ chars: charId }); } });
 
+// ---------- Pod control (start/stop, waking up, auto-off countdown) ----------
+let podState = null;        // latest pod info from the Worker (null = off or unknown)
+let podStatusAt = 0;        // when podState was fetched (ms)
+let podBusy = false;        // a start/stop request is in flight
+let podError = '';
+let pollTimer = null;
+let spend = {};
+
+// Settings for talking to KoboldCpp: with pod control, the pod address comes from the Worker.
+function apiSettings() {
+  if (podControlEnabled(settings) && podState?.url) return { ...settings, podUrl: podState.url };
+  return settings;
+}
+
+function liveShutdownIn() {
+  if (!podState) return null;
+  return podState.shutdownInSec - (Date.now() - podStatusAt) / 1000;
+}
+
+function applyPodStatus(pod) {
+  const wasReady = podState?.ready;
+  podState = pod || null;
+  podStatusAt = Date.now();
+  podError = '';
+  if (pod) {
+    spend = recordSession(spend, pod);
+    store.set('spend', spend).catch(() => {});
+  }
+  if (pod?.ready && !wasReady && podStatusAt - appStartedAt > 3000) toast('Your pod is ready.');
+  renderPod();
+}
+
+async function refreshPod() {
+  if (!podControlEnabled(settings) || document.hidden) return;
+  try {
+    applyPodStatus((await getStatus(settings)).pod);
+  } catch (e) {
+    podError = e.message;
+    renderPod();
+  }
+}
+
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  if (!podControlEnabled(settings)) return;
+  // Poll often while waking up, less often once ready or off.
+  const ms = podState && !podState.ready ? 8000 : podState ? 20000 : 45000;
+  pollTimer = setTimeout(async () => { await refreshPod(); schedulePoll(); }, ms);
+}
+
+function renderPod() {
+  const enabled = podControlEnabled(settings);
+  const btn = $('#pod-btn');
+  const dot = $('#pod-dot');
+  const total = monthTotal(spend);
+  $('#pod-meta').textContent = enabled ? `This month: about $${total.toFixed(2)}` : '';
+
+  if (!enabled) {
+    dot.className = 'pod-dot';
+    $('#pod-title').textContent = 'Pod control not set up';
+    $('#pod-sub').innerHTML = 'Add your Worker in <a href="#/settings">Settings</a> to start and stop the pod from here.';
+    btn.hidden = true;
+  } else if (podBusy) {
+    btn.disabled = true;
+  } else if (!podState) {
+    dot.className = 'pod-dot';
+    $('#pod-title').textContent = 'Pod is off';
+    $('#pod-sub').textContent = podError || 'Tap Start to load the model. Takes about 5–10 minutes.';
+    btn.hidden = false; btn.disabled = false; btn.textContent = 'Start'; btn.className = 'pod-btn';
+  } else if (!podState.ready) {
+    dot.className = 'pod-dot waking';
+    $('#pod-title').textContent = `Waking up… ${fmtDuration(podState.ageSec + (Date.now() - podStatusAt) / 1000)}`;
+    $('#pod-sub').textContent = podError || `Downloading and loading the model on ${podState.gpu || 'the GPU'}. Usually 5–10 minutes.`;
+    btn.hidden = false; btn.disabled = false; btn.textContent = 'Stop'; btn.className = 'pod-btn stop';
+  } else {
+    dot.className = 'pod-dot on';
+    $('#pod-title').textContent = `Ready · ${(podState.gpu || 'GPU').replace(/^NVIDIA (GeForce |RTX )?/, '')} · $${podState.costPerHour.toFixed(2)}/hr`;
+    const left = liveShutdownIn();
+    $('#pod-sub').textContent = podError || `Auto-off in ${fmtDuration(left)}${podState.shutdownReason === 'idle' ? ' if no messages' : ''}`;
+    btn.hidden = false; btn.disabled = false; btn.textContent = 'Stop'; btn.className = 'pod-btn stop';
+  }
+  renderChatBanner();
+}
+
+function renderChatBanner() {
+  const enabled = podControlEnabled(settings);
+  const left = liveShutdownIn();
+  const showAutoOff = enabled && podState?.ready && left !== null && left <= 120;
+  $('#autooff-banner').hidden = !showAutoOff;
+  if (showAutoOff) $('#autooff-text').textContent = `Auto-off in ${fmtDuration(left)}`;
+  const off = enabled && !podState?.ready;
+  $('#pod-off-banner').hidden = !off;
+  if (off) {
+    $('#pod-off-text').textContent = podState ? `Pod is waking up… ${fmtDuration(podState.ageSec + (Date.now() - podStatusAt) / 1000)}` : 'The pod is off.';
+    $('#banner-start').hidden = !!podState;
+  }
+}
+
+async function podStart() {
+  if (podBusy) return;
+  if (!settings.password) { toast('Set a pod password in Settings first.'); location.hash = '#/settings'; return; }
+  podBusy = true; renderPod();
+  $('#pod-title').textContent = 'Starting…';
+  $('#pod-sub').textContent = 'Asking Runpod for a GPU.';
+  try {
+    const r = await startPod(settings);
+    applyPodStatus(r.pod);
+    if (r.pod) toast(`Started on ${r.pod.gpu || 'a GPU'} at $${(r.pod.costPerHour || 0).toFixed(2)}/hr.`);
+  } catch (e) {
+    podError = e.message;
+    toast(e.message, 6000);
+  }
+  podBusy = false; renderPod(); schedulePoll();
+}
+
+async function podStop() {
+  if (podBusy) return;
+  if (!confirm('Stop the pod? Billing stops right away. Your chats are kept on this phone.')) return;
+  podBusy = true; renderPod();
+  try {
+    await stopPod(settings);
+    applyPodStatus(null);
+    toast('Pod stopped.');
+  } catch (e) {
+    toast(e.message, 6000);
+  }
+  podBusy = false; renderPod(); schedulePoll();
+}
+
+$('#pod-btn').addEventListener('click', () => (podState ? podStop() : podStart()));
+$('#banner-start').addEventListener('click', podStart);
+$('#keep-on').addEventListener('click', async () => {
+  try {
+    await keepAlive(podState.url, settings.password);
+    await refreshPod();
+    toast('Keeping it on.');
+  } catch (_) {
+    toast("Couldn't reach the pod.");
+  }
+});
+
+// Tick the countdowns every second without asking the Worker.
+setInterval(() => { if (podState) renderPod(); }, 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshPod(); schedulePoll(); } });
+const appStartedAt = Date.now();
+
 // ---------- Keyboard handling (iPhone) ----------
 // Keep the app exactly as tall as the visible area, so the composer sits
 // right above the keyboard and the latest messages stay in view.
@@ -1122,7 +1314,11 @@ window.addEventListener('resize', fitToViewport);
     toast("Couldn't open saved data on this device.");
   }
   store.requestPersistence();
+  spend = (await store.get('spend').catch(() => null)) || {};
   route();
+  renderPod();
+  await refreshPod();
+  schedulePoll();
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

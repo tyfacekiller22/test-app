@@ -141,6 +141,27 @@ input, textarea, select { font: inherit; color: var(--text); }
 .empty-text { color: var(--muted); margin: 0 0 18px; }
 .home-footer { padding: 12px 16px calc(env(safe-area-inset-bottom) + 12px); border-top: 1px solid var(--line); background: var(--bar); }
 
+/* ---------- Pod card (home) ---------- */
+.pod-card { margin: 12px 12px 4px; padding: 12px 12px 10px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); }
+.pod-row { display: flex; align-items: center; gap: 12px; }
+.pod-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
+.pod-dot.on { background: #2E9E5B; }
+.pod-dot.waking { background: #E0A100; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+.pod-text { flex: 1; min-width: 0; }
+.pod-title { font-weight: 600; font-size: 16px; }
+.pod-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.pod-btn { min-height: 40px; padding: 0 16px; border-radius: 10px; border: 0; font-weight: 600; font-size: 15px; background: var(--accent); color: var(--accent-text); flex-shrink: 0; }
+.pod-btn.stop { background: transparent; color: var(--danger); border: 1px solid var(--field-line); }
+.pod-meta { font-size: 12px; color: var(--faint); margin-top: 8px; }
+.pod-meta:empty { display: none; }
+
+/* Auto-off banner (chat) */
+.autooff-banner { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--dir-bg); color: var(--dir-text); border-bottom: 1px solid var(--dir-line); font-size: 14px; flex-shrink: 0; }
+.autooff-banner span { flex: 1; }
+.autooff-banner button { min-height: 32px; padding: 0 12px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 14px; }
+.autooff-banner.off { background: var(--bar); color: var(--muted); border-color: var(--line); }
+
 /* ---------- Buttons ---------- */
 .btn-primary, .btn-secondary, .btn-danger {
   min-height: 44px; padding: 0 18px; border-radius: 12px; border: 0;
@@ -340,7 +361,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 /* ---------- Toast ---------- */
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%);
-  top: calc(env(safe-area-inset-top) + 64px);
+  top: calc(env(safe-area-inset-top) + 184px);
   max-width: min(92vw, 520px);
   background: var(--text); color: var(--bg);
   padding: 10px 14px; border-radius: 12px; font-size: 14px; z-index: 30;

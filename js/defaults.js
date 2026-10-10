@@ -43,13 +43,16 @@ export const DEFAULT_BANNED_PHRASES = [
   'little did',
 ].join('\n');
 
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
 export const DEFAULT_SETTINGS = {
   settingsVersion: SETTINGS_VERSION,
-  podUrl: '',            // e.g. https://abc123-5001.proxy.runpod.net
+  podUrl: '',            // manual pod address (only needed without pod control)
   password: '',
-  maxReplyTokens: 200,
+  workerUrl: '',         // your Cloudflare Worker address (pod control + auto-off)
+  appKey: '',            // the APP_KEY you set in the Worker
+  modelUrl: 'https://huggingface.co/bartowski/TheDrummer_Artemis-31B-v1.1-GGUF/resolve/main/TheDrummer_Artemis-31B-v1.1-Q6_K.gguf',
+  maxReplyTokens: 400,   // safety net only; length is kept short by maxParagraphs + instructions
   maxParagraphs: 2,      // replies are cut off after this many paragraphs (0 = no limit)
   contextSize: 32768,
   temperature: 1.0,

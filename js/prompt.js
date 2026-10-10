@@ -129,6 +129,23 @@ export function cutParagraphs(text, max) {
   return ps.slice(0, max).join(sep);
 }
 
+// If a reply was cut off mid-sentence, trim it back to the last complete sentence
+// and close any *action* left open.
+const ENDS_CLEAN = /[.!?…"”'’*)~\]]\s*$/;
+export function trimIncomplete(text) {
+  let t = (text || '').trimEnd();
+  if (!t || ENDS_CLEAN.test(t)) return t;
+  // Last sentence end: . ! ? … optionally followed by closing quotes/asterisks/brackets.
+  const re = /[.!?…]["”'’*)\]]*(?=\s|$)/g;
+  let cut = -1, m;
+  while ((m = re.exec(t))) cut = m.index + m[0].length;
+  if (cut > t.length * 0.3) t = t.slice(0, cut).trimEnd(); // don't throw away most of a reply
+  else t = t.replace(/[\s,;:–—-]+$/, '') + '…';             // no clean place to cut: trail off
+  // Close an unfinished *action*.
+  if (((t.match(/\*/g) || []).length) % 2 === 1) t += '*';
+  return t;
+}
+
 // Cleans up a finished reply: removes a leading "Name:" label and stray whitespace.
 export function tidy(text, chat, mode) {
   let t = (text || '').trim();
