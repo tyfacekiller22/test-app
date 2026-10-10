@@ -1296,9 +1296,24 @@ function fitToViewport() {
   const h = vv ? vv.height : window.innerHeight;
   document.documentElement.style.setProperty('--app-height', h + 'px');
   window.scrollTo(0, 0);
+  // Keyboard is open when the visible area is much shorter than the screen.
+  document.documentElement.classList.toggle('keyboard-open', h < window.innerHeight * 0.8 || (window.screen && h < screen.height * 0.7));
+  if (keepSheetFieldVisible()) return;
   if (editingId) keepEditorVisible();
   else if (current) scrollToBottom();
 }
+
+// When typing inside a bottom sheet (e.g. the character editor), scroll the field
+// into the visible part of the sheet once the keyboard has opened.
+function keepSheetFieldVisible() {
+  const el = document.activeElement;
+  if (!el || !el.closest || !el.closest('.sheet-body') || !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return false;
+  requestAnimationFrame(() => el.scrollIntoView({ block: 'nearest' }));
+  return true;
+}
+document.addEventListener('focusin', (e) => {
+  if (e.target.closest && e.target.closest('.sheet-body')) setTimeout(keepSheetFieldVisible, 350);
+});
 if (window.visualViewport) {
   visualViewport.addEventListener('resize', fitToViewport);
   visualViewport.addEventListener('scroll', () => window.scrollTo(0, 0));
