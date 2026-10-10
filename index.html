@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Companion</title>
+  <meta name="description" content="Private chat companion">
+  <meta name="theme-color" content="#F9F9FB" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1C1C1E" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Companion">
+  <meta name="referrer" content="no-referrer">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- Home: list of chats -->
+    <section id="view-home" class="view">
+      <header class="topbar">
+        <h1 class="topbar-title">Chats</h1>
+        <button class="icon-btn" id="import-btn" aria-label="Import chats or characters">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>
+        </button>
+        <input type="file" id="import-file" accept=".json,application/json" hidden>
+        <button class="icon-btn" id="open-settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+      </header>
+      <main class="home-main">
+        <ul id="chat-list" class="chat-list"></ul>
+        <div id="home-empty" class="empty" hidden>
+          <p class="empty-title">No chats yet</p>
+          <p class="empty-text">Start one, try the example character, or import your Perchance chats with the ⬇ button above.</p>
+          <button class="btn-secondary" id="try-example">Try the example (Mara)</button>
+        </div>
+      </main>
+      <div class="home-footer">
+        <button class="btn-primary wide" id="new-chat">New chat</button>
+      </div>
+    </section>
+
+    <!-- Chat -->
+    <section id="view-chat" class="view" hidden>
+      <header class="topbar">
+        <button class="icon-btn accent" id="chat-back" aria-label="Back to chats">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <button class="chat-title" id="chat-title" aria-label="Chat settings">
+          <span class="avatar" id="chat-avatar"></span>
+          <span class="chat-name" id="chat-name"></span>
+          <span class="lock" id="chat-lock" hidden title="This chat is not being saved">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          </span>
+        </button>
+        <button class="icon-btn" id="chat-more" aria-label="Chat settings">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </button>
+      </header>
+
+      <main id="messages" class="messages" aria-live="polite"></main>
+
+      <footer class="composer">
+        <div class="direction" id="direction-box">
+          <label for="direction" class="sr-only">What happens next</label>
+          <input id="direction" type="text" placeholder="What happens next…" autocomplete="off" enterkeyhint="done">
+          <button class="icon-btn small" id="clear-direction" aria-label="Clear direction" hidden>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
+          </button>
+        </div>
+
+        <div class="actions">
+          <button class="switch" id="auto" role="switch" aria-checked="true">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span>Auto</span>
+          </button>
+          <span class="divider" aria-hidden="true"></span>
+          <div class="ai-actions">
+            <button class="ai-btn" id="write-for-me">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>
+              <span>Write for me</span>
+            </button>
+            <button class="ai-btn" id="narrate">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg>
+              <span>Narrate</span>
+            </button>
+            <button class="ai-btn" id="regenerate">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+              <span id="regenerate-label">Regenerate</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="input-row">
+          <label for="message" class="sr-only">Message</label>
+          <textarea id="message" rows="4" placeholder="Message"></textarea>
+          <button class="send" id="send" aria-label="Send">
+            <svg class="i-send" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>
+            <svg class="i-stop" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          </button>
+        </div>
+      </footer>
+    </section>
+
+    <!-- Settings -->
+    <section id="view-settings" class="view" hidden>
+      <header class="topbar">
+        <button class="icon-btn accent" id="settings-back" aria-label="Back">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <h1 class="topbar-title">Settings</h1>
+        <span class="topbar-spacer"></span>
+      </header>
+      <main class="settings-main" id="settings-form"></main>
+    </section>
+  </div>
+
+  <div id="sheet-root"></div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
