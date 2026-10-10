@@ -8,10 +8,12 @@ Chats, characters, your pod address and password are stored only on your phone.
 - Chat screen: live typing replies, Stop button, Auto switch, Write for me, Narrate
   (long-press Narrate to give it a focus), Regenerate / Reply, swipe between versions
 - "What happens next" box: stays active until you clear it, never shown in the chat
-- Tap any message to edit it in place, or delete it. "More" (or long-press) adds copy,
+- Trash button under every message deletes it in one tap (with Undo)
+- Tap any message to edit it in place (the bottom area hides to make room). "More" (or long-press) adds copy,
   regenerate and "delete this and everything after"
 - Replies are kept to 2 paragraphs by default (Settings → Max paragraphs per reply)
-- Import (⬇ on the chat list): Perchance AI Character Chat exports/backups (.json),
+- Import (⬇ on the chat list): Perchance AI Chat files (perchance.org/ai-chat),
+  Perchance AI Character Chat exports/backups (.json),
   and SillyTavern-style character cards (.json)
 - Chat settings (⋯ or tap the name): edit the character/you/situation, chat-only
   instructions, narrator instructions, global instructions on/off, save on/off,

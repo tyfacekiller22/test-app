@@ -119,12 +119,75 @@ function fromCharacterCard(json) {
   }];
 }
 
+// perchance.org/ai-chat saves one chat per file:
+// { format: 'perchance-ai-chat-v1', botName, userName, botDescription, userDescription,
+//   scenario, chatLogs (the whole conversation as text), whatHappensNext, writingInstructions }
+// chatLogs is split into messages at lines that start with a speaker name, e.g.
+// "[Mary]: Hi" or "Mary: Hi". Anything else stays part of the message above it.
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function splitChatLog(log, botName, userName, otherNames = []) {
+  const text = str(log).replace(/\r\n/g, '\n').trim();
+  if (!text) return [];
+  const names = [botName, userName, 'Narrator', 'System', 'SYSTEM', ...otherNames].filter(Boolean);
+  const nameAlt = names.map(escapeRe).join('|');
+  // Speaker line: optional ** or [ ], the name, optional ] or **, then a colon.
+  const speaker = new RegExp(`^\\s*(?:\\*\\*)?\\[?(${nameAlt})\\]?(?:\\*\\*)?\\s*:\\s?(.*)$`, 'i');
+  const out = [];
+  let cur = null;
+  for (const line of text.split('\n')) {
+    const m = line.match(speaker);
+    if (m) {
+      if (cur) out.push(cur);
+      const who = m[1].toLowerCase();
+      const role = who === str(userName).toLowerCase() ? 'user' : who === str(botName).toLowerCase() ? 'char' : 'narrator';
+      cur = { role, name: m[1], lines: [m[2]] };
+    } else if (cur) {
+      cur.lines.push(line);
+    } else {
+      cur = { role: 'narrator', name: '', lines: [line] }; // text before the first speaker
+    }
+  }
+  if (cur) out.push(cur);
+  return out
+    .map((m) => {
+      let t = m.lines.join('\n').trim();
+      // Another character in the scene (not the main bot): keep their name visible.
+      if (m.role === 'narrator' && m.name && !/^(narrator|system)$/i.test(m.name)) {
+        return { role: 'char', text: `**${m.name}:** ${t}`, versions: [] };
+      }
+      return { role: m.role, text: t, versions: [] };
+    })
+    .filter((m) => m.text);
+}
+
+function fromPerchanceAiChat(json) {
+  const botName = str(json.botName).trim() || 'Character';
+  const userName = str(json.userName).trim() || 'User';
+  const others = Array.isArray(json.miscData?.deletedCharacterNames) ? json.miscData.deletedCharacterNames.filter((n) => typeof n === 'string') : [];
+  const messages = splitChatLog(json.chatLogs, botName, userName, others);
+  return [{
+    title: `${botName} & ${userName}`,
+    charName: botName,
+    charDescription: str(json.botDescription).trim(),
+    userName,
+    userDescription: str(json.userDescription).trim(),
+    situation: str(json.scenario).trim(),
+    chatInstructions: str(json.writingInstructions).trim(),
+    direction: str(json.whatHappensNext).trim(),
+    messages,
+  }];
+}
+
 export function parseImport(text) {
   let json;
   try {
     json = JSON.parse(text);
   } catch (_) {
     throw new Error("That file isn't valid JSON.");
+  }
+  if (str(json?.format).startsWith('perchance-ai-chat') || ('chatLogs' in (json || {}) && 'botName' in (json || {}))) {
+    return { source: 'Perchance AI Chat', drafts: fromPerchanceAiChat(json) };
   }
   const tables = findTables(json);
   if ((tables.characters?.length || 0) + (tables.threads?.length || 0) > 0) {

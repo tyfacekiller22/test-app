@@ -56,9 +56,17 @@ async function loadAll() {
 
 // ---------- Toast ----------
 let toastTimer;
-function toast(msg, ms = 3500) {
+// action: optional { label, onClick } shows a button in the toast (e.g. Undo).
+function toast(msg, ms = 3500, action = null) {
   const el = $('#toast');
   el.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.onclick = () => { el.hidden = true; action.onClick(); };
+    el.appendChild(b);
+  }
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.hidden = true), ms);
@@ -188,7 +196,7 @@ function importPreview({ source, drafts }) {
         useGlobal: true,
         save: true,
         auto: true,
-        direction: '',
+        direction: d.direction || '',
         messages: [],
       };
       chat.messages = d.messages.map((m) => {
@@ -301,6 +309,7 @@ function lastMessage() {
 
 function renderMessages() {
   editingId = null;
+  $('#view-chat').classList.remove('editing-mode');
   const box = $('#messages');
   const msgs = current.messages;
   if (!msgs.length) {
@@ -316,25 +325,29 @@ function renderMessages() {
 function messageHtml(m, isLatestChar) {
   const streaming = gen && gen.msgId === m.id;
   const body = renderText(textOf(m));
-  if (m.role === 'narrator') {
-    return `<div class="msg narrator${streaming ? ' typing' : ''}" data-id="${m.id}">${body}</div>`;
-  }
   let swipes = '';
   if (m.role === 'char' && isLatestChar && m.versions.length > 1 && !streaming) {
-    swipes = `<div class="swipes">
+    swipes = `<span class="swipes">
       <button data-swipe="-1" aria-label="Previous version"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
       <span>${m.vi + 1} / ${m.versions.length}</span>
       <button data-swipe="1" aria-label="Next version"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
-    </div>`;
+    </span>`;
+  }
+  const tools = streaming ? '' : `<div class="msg-tools">${swipes}
+      <button class="del-btn" data-del aria-label="Delete message">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
+      </button></div>`;
+  if (m.role === 'narrator') {
+    return `<div class="msg narrator" data-id="${m.id}"><div class="narr-text${streaming ? ' typing' : ''}">${body}</div>${tools}</div>`;
   }
   return `<div class="msg ${m.role}" data-id="${m.id}">
-    <div class="bubble${streaming ? ' typing' : ''}">${body}</div>${swipes}</div>`;
+    <div class="bubble${streaming ? ' typing' : ''}">${body}</div>${tools}</div>`;
 }
 
 function updateStreaming(m) {
   const el = $(`.msg[data-id="${m.id}"]`);
   if (!el) return renderMessages();
-  const target = m.role === 'narrator' ? el : $('.bubble', el);
+  const target = m.role === 'narrator' ? $('.narr-text', el) : $('.bubble', el);
   const nearBottom = isNearBottom();
   target.innerHTML = renderText(textOf(m));
   if (nearBottom) scrollToBottom();
@@ -358,6 +371,26 @@ function swipe(m, dir) {
   saveChat(current);
   renderMessages();
 }
+
+// One-tap delete, with Undo.
+$('#messages').addEventListener('click', (e) => {
+  const d = e.target.closest('[data-del]');
+  if (!d || gen) return;
+  const chat = current;
+  const i = chat.messages.findIndex((x) => x.id === d.closest('.msg').dataset.id);
+  if (i < 0) return;
+  const [removed] = chat.messages.splice(i, 1);
+  saveChat(chat);
+  renderMessages();
+  toast('Message deleted.', 5000, {
+    label: 'Undo',
+    onClick: () => {
+      chat.messages.splice(i, 0, removed);
+      saveChat(chat);
+      if (current === chat) renderMessages();
+    },
+  });
+});
 
 $('#messages').addEventListener('click', (e) => {
   const b = e.target.closest('[data-swipe]');
@@ -448,6 +481,7 @@ function startInlineEdit(id) {
   if (!m || !el) return;
   editingId = id;
   el.classList.add('editing');
+  $('#view-chat').classList.add('editing-mode'); // hide the bottom area to make room
   el.innerHTML = `<div class="inline-editor">
       <label class="sr-only" for="inline-text">Edit message</label>
       <textarea id="inline-text">${escapeHtml(textOf(m))}</textarea>
@@ -460,7 +494,12 @@ function startInlineEdit(id) {
       </div>
     </div>`;
   const ta = $('#inline-text', el);
-  const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 320) + 'px'; };
+  const fit = () => {
+    const room = $('#messages').clientHeight - 80; // leave space for the buttons
+    ta.style.height = 'auto';
+    ta.style.height = Math.max(120, Math.min(ta.scrollHeight + 2, room)) + 'px';
+  };
+  if (window.visualViewport) visualViewport.addEventListener('resize', fit, { once: true });
   ta.addEventListener('input', fit);
   fit();
   ta.focus({ preventScroll: true });
