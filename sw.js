@@ -2,18 +2,21 @@
 // It only stores the app's own files. Requests to your pod are never cached.
 // Network-first: when online you always get the latest version of the app.
 
-const CACHE = 'companion-v4';
+const CACHE = 'companion-v7';
 const SHELL = [
   './',
   'index.html',
   'css/app.css',
   'js/app.js',
   'js/api.js',
+  'js/backup.js',
   'js/defaults.js',
   'js/format.js',
   'js/importer.js',
+  'js/library.js',
   'js/prompt.js',
   'js/store.js',
+  'js/ui.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',
@@ -21,7 +24,7 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -36,7 +39,8 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith(
-    fetch(req)
+    // no-cache: always check GitHub for a newer copy instead of using the browser's saved one.
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(req, copy));

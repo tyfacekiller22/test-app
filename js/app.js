@@ -7,16 +7,18 @@ import { streamChat, abortGeneration, testConnection, ApiError } from './api.js'
 import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs } from './prompt.js';
 import { parseImport } from './importer.js';
 import { renderText, escapeHtml, timeAgo } from './format.js';
+import { $, uid, toast, openSheet, avatarHtml, avatarInner, onLongPress } from './ui.js';
+import * as library from './library.js';
+import { lib, KINDS, MAP } from './library.js';
+import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const $ = (sel, root = document) => root.querySelector(sel);
+const APP_VERSION = 7; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
 const chats = new Map();      // id → chat
 let current = null;           // the open chat
 let gen = null;               // { controller, mode, chatId } while a reply is being written
-
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 // ---------- Saving ----------
 async function saveSettings() { await store.set('settings', settings); }
@@ -46,6 +48,7 @@ async function loadAll() {
     settings.settingsVersion = SETTINGS_VERSION;
     await saveSettings();
   }
+  await library.loadLibrary();
   for (const key of await store.keys()) {
     if (typeof key === 'string' && key.startsWith('chat:')) {
       const c = await store.get(key);
@@ -54,51 +57,9 @@ async function loadAll() {
   }
 }
 
-// ---------- Toast ----------
-let toastTimer;
-// action: optional { label, onClick } shows a button in the toast (e.g. Undo).
-function toast(msg, ms = 3500, action = null) {
-  const el = $('#toast');
-  el.textContent = msg;
-  if (action) {
-    const b = document.createElement('button');
-    b.className = 'toast-action';
-    b.textContent = action.label;
-    b.onclick = () => { el.hidden = true; action.onClick(); };
-    el.appendChild(b);
-  }
-  el.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), ms);
-}
-
-// ---------- Bottom sheets ----------
-function openSheet({ title, body, actions = '' }) {
-  const root = $('#sheet-root');
-  const scrim = document.createElement('div');
-  scrim.className = 'scrim';
-  scrim.innerHTML = `
-    <div class="sheet" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
-      <div class="sheet-head">
-        <h2>${escapeHtml(title)}</h2>
-        <button class="icon-btn" data-close aria-label="Close">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </div>
-      <div class="sheet-body">${body}</div>
-      ${actions ? `<div class="sheet-actions">${actions}</div>` : ''}
-    </div>`;
-  const close = () => scrim.remove();
-  scrim.addEventListener('click', (e) => {
-    if (e.target === scrim || e.target.closest('[data-close]')) close();
-  });
-  root.appendChild(scrim);
-  return { el: scrim, close };
-}
-
 // ---------- Routing ----------
 function show(view) {
-  for (const v of ['home', 'chat', 'settings']) $('#view-' + v).hidden = v !== view;
+  for (const v of ['home', 'chat', 'settings', 'library']) $('#view-' + v).hidden = v !== view;
 }
 
 function route() {
@@ -106,6 +67,9 @@ function route() {
   const m = hash.match(/^#\/chat\/(.+)$/);
   if (m && chats.has(m[1])) {
     openChat(chats.get(m[1]));
+  } else if (hash === '#/library') {
+    library.renderLibrary();
+    show('library');
   } else if (hash === '#/settings') {
     renderSettings();
     show('settings');
@@ -118,15 +82,19 @@ function route() {
 window.addEventListener('hashchange', route);
 
 // ---------- Home ----------
+let homeEditing = false;
+
 function renderHome() {
   const list = [...chats.values()].sort((a, b) => b.updated - a.updated);
   $('#home-empty').hidden = list.length > 0;
+  $('#home-edit').hidden = !list.length;
+  if (!list.length) setHomeEditing(false);
   $('#chat-list').innerHTML = list
     .map((c) => {
       const last = [...c.messages].reverse().find((m) => textOf(m).trim());
       const snippet = last ? textOf(last).replace(/\*/g, '') : c.situation || '';
-      return `<li><button class="chat-item" data-id="${c.id}">
-        <span class="avatar">${escapeHtml((c.charName || '?')[0].toUpperCase())}</span>
+      return `<li class="chat-row"><button class="chat-item" data-id="${c.id}">
+        ${avatarHtml(c.charName, c.charPhoto)}
         <span class="chat-item-body">
           <span class="chat-item-top">
             <span class="chat-item-name">${escapeHtml(c.charName)}${c.save === false ? ' · not saved' : ''}</span>
@@ -134,18 +102,73 @@ function renderHome() {
           </span>
           <span class="chat-item-snippet">${escapeHtml(fill(snippet, c))}</span>
         </span>
-      </button></li>`;
+      </button>
+      <button class="row-delete" data-delete-chat="${c.id}" aria-label="Delete chat with ${escapeHtml(c.charName)}">Delete</button></li>`;
     })
     .join('');
 }
 
-$('#chat-list').addEventListener('click', (e) => {
-  const b = e.target.closest('.chat-item');
-  if (b) location.hash = '#/chat/' + b.dataset.id;
+function setHomeEditing(on) {
+  homeEditing = on;
+  $('#view-home').classList.toggle('home-editing', on);
+  $('#home-edit').textContent = on ? 'Done' : 'Edit';
+  $('#home-edit').setAttribute('aria-pressed', String(on));
+}
+$('#home-edit').addEventListener('click', () => setHomeEditing(!homeEditing));
+
+// Deletes a chat, with Undo.
+async function deleteChat(c) {
+  chats.delete(c.id);
+  clearTimeout(saveTimers.get(c.id));
+  try { await store.del('chat:' + c.id); } catch { /* already gone */ }
+  if (current === c) current = null;
+  if (location.hash === '#/' || location.hash === '') renderHome();
+  toast(`Deleted chat with ${c.charName}.`, 6000, {
+    label: 'Undo',
+    onClick: () => {
+      chats.set(c.id, c);
+      saveChat(c, { now: true });
+      renderHome();
+    },
+  });
+}
+
+const wasLongPress = onLongPress($('#chat-list'), '.chat-item', (b) => {
+  const c = chats.get(b.dataset.id);
+  if (!c) return;
+  const s = openSheet({
+    title: c.charName,
+    body: `<ul class="menu">
+      <li><button data-act="open">Open chat</button></li>
+      <li><button data-act="delete" class="danger">Delete chat</button></li>
+    </ul>`,
+  });
+  s.el.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (!act) return;
+    s.close();
+    if (act === 'open') location.hash = '#/chat/' + c.id;
+    if (act === 'delete') deleteChat(c);
+  });
 });
+
+$('#chat-list').addEventListener('click', (e) => {
+  const del = e.target.closest('[data-delete-chat]');
+  if (del) { const c = chats.get(del.dataset.deleteChat); if (c) deleteChat(c); return; }
+  const b = e.target.closest('.chat-item');
+  if (!b || wasLongPress()) return;
+  if (homeEditing) { setHomeEditing(false); return; }
+  location.hash = '#/chat/' + b.dataset.id;
+});
+$('#open-library').addEventListener('click', () => (location.hash = '#/library'));
+$('#library-back').addEventListener('click', () => (location.hash = '#/'));
 $('#open-settings').addEventListener('click', () => (location.hash = '#/settings'));
 $('#new-chat').addEventListener('click', () => newChatSheet());
-$('#try-example').addEventListener('click', () => newChatSheet(EXAMPLE_CHAT));
+$('#try-example').addEventListener('click', () => {
+  const pre = {};
+  for (const kind of Object.keys(KINDS)) pre[kind] = (library.sorted(kind)[0] || {}).id || '';
+  newChatSheet(pre);
+});
 
 // ---------- Import (Perchance chats, character cards) ----------
 $('#import-btn').addEventListener('click', () => $('#import-file').click());
@@ -153,14 +176,15 @@ $('#import-file').addEventListener('change', async (e) => {
   const file = e.target.files?.[0];
   e.target.value = '';
   if (!file) return;
-  let result;
+  let text, json = null;
   try {
-    result = parseImport(await file.text());
+    text = await file.text();
+    try { json = JSON.parse(text); } catch { /* not JSON: let the importer explain */ }
+    if (isBackup(json)) return restoreBackup(json);
+    importPreview(parseImport(text));
   } catch (err) {
     toast(err.message || "Couldn't read that file.");
-    return;
   }
-  importPreview(result);
 });
 
 function importPreview({ source, drafts }) {
@@ -173,11 +197,14 @@ function importPreview({ source, drafts }) {
           <span><span class="import-name">${escapeHtml(d.title)}</span>
           <span class="hint">${escapeHtml(d.charName)} · ${d.messages.length} message${d.messages.length === 1 ? '' : 's'}</span></span>
         </label></li>`)
-        .join('')}</ul>`,
+        .join('')}</ul>
+      <div class="toggle-row"><div><div class="label">Also add the characters to my library</div><div class="hint">So you can start new chats with them.</div></div>
+        <input type="checkbox" id="import-to-lib" checked aria-label="Also add the characters to my library"></div>`,
     actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="do-import">Import</button>',
   });
   $('#do-import', s.el).addEventListener('click', () => {
     const picked = [...s.el.querySelectorAll('input[data-i]:checked')].map((x) => drafts[Number(x.dataset.i)]);
+    const toLib = $('#import-to-lib', s.el).checked;
     let n = 0;
     for (const d of picked) {
       const chat = {
@@ -204,6 +231,7 @@ function importPreview({ source, drafts }) {
         const vi = Math.max(0, versions.indexOf(m.text));
         return { id: uid(), role: m.role, versions, vi, ts: Date.now() };
       });
+      if (toLib) linkToLibrary(chat, ['chars', 'users']);
       chats.set(chat.id, chat);
       saveChat(chat, { now: true });
       n++;
@@ -214,12 +242,24 @@ function importPreview({ source, drafts }) {
   });
 }
 
+// Saves a chat's characters/situation to the library (or links to an identical saved one).
+function linkToLibrary(chat, kinds = ['chars', 'users', 'situations']) {
+  for (const kind of kinds) {
+    if (chat[MAP[kind].id] || !library.hasContent(kind, chat)) continue;
+    const same = library.sameAs(kind, chat);
+    const item = same || library.addItem(kind, library.fromChat(kind, chat));
+    chat[MAP[kind].id] = item.id;
+  }
+}
+
 // ---------- Chat setup fields (used by "New chat" and chat settings) ----------
-function chatFields(c) {
+// picks: { chars, users, situations } = selected library ids (or '' for none).
+function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
   const v = (k) => escapeHtml(c[k] || '');
   return `
     <div class="group" style="margin-top:4px">
       <h2>AI character</h2>
+      ${library.pickerHtml('chars', picks.chars, pickLabel)}
       <div class="field"><label for="f-charName">Name</label><input id="f-charName" type="text" value="${v('charName')}" autocomplete="off"></div>
       <div class="field"><label for="f-charDescription">Personality, background, how they talk</label>
         <textarea id="f-charDescription" rows="6">${v('charDescription')}</textarea>
@@ -227,13 +267,15 @@ function chatFields(c) {
     </div>
     <div class="group">
       <h2>You</h2>
+      ${library.pickerHtml('users', picks.users, pickLabel)}
       <div class="field"><label for="f-userName">Your name in the story</label><input id="f-userName" type="text" value="${v('userName')}" autocomplete="off"></div>
       <div class="field"><label for="f-userDescription">Who you are in the story (optional)</label><textarea id="f-userDescription" rows="3">${v('userDescription')}</textarea></div>
     </div>
     <div class="group">
       <h2>Situation</h2>
+      ${library.pickerHtml('situations', picks.situations, pickLabel)}
       <div class="field"><label for="f-situation">Setting and what's going on (optional)</label><textarea id="f-situation" rows="3">${v('situation')}</textarea></div>
-      <div class="field"><label for="f-openingMessage">Opening message from the character (optional)</label><textarea id="f-openingMessage" rows="3">${v('openingMessage')}</textarea></div>
+      ${opening ? `<div class="field"><label for="f-openingMessage">Opening message from the character (optional)</label><textarea id="f-openingMessage" rows="3">${v('openingMessage')}</textarea></div>` : ''}
     </div>
     <p class="hint">Tip: write {{char}} and {{user}} to stand in for the two names.</p>`;
 }
@@ -247,23 +289,66 @@ function readFields(root, keys) {
   return out;
 }
 
-function newChatSheet(prefill = {}) {
-  const draft = { userName: 'Sam', ...prefill };
+// Hooks up the three library pickers in a sheet. state.picks[kind] = chosen library id
+// ('' = none); state.photos = { charPhoto, userPhoto }.
+// clearOnNone: choosing "Write a new one" empties the fields (New chat) or leaves them (Chat settings).
+function wirePickers(root, state, { clearOnNone }) {
+  for (const kind of Object.keys(KINDS)) {
+    const sel = $('#p-' + kind, root);
+    if (!sel) continue;
+    sel.addEventListener('change', () => {
+      const item = library.find(kind, sel.value);
+      state.picks[kind] = sel.value;
+      let fields = null;
+      if (item) fields = library.toChat(kind, item);
+      else if (clearOnNone) fields = Object.fromEntries(Object.values(MAP[kind].fields).map((k) => [k, '']));
+      if (!fields) return;
+      for (const [k, val] of Object.entries(fields)) {
+        const el = $('#f-' + k, root);
+        if (el) el.value = val;
+        if (k === 'charPhoto' || k === 'userPhoto') state.photos[k] = val;
+      }
+    });
+  }
+}
+
+// New chat: pick a character, you, and a situation (or write new ones), then start.
+// pre: { chars, users, situations } library ids to start with.
+function newChatSheet(pre = {}) {
+  const picks = {
+    chars: pre.chars || '',
+    users: pre.users ?? (library.find('users', settings.lastUserCharId) ? settings.lastUserCharId : ''),
+    situations: pre.situations || '',
+  };
+  const draft = { userName: 'User' };
+  const photos = {};
+  for (const kind of Object.keys(picks)) {
+    const item = library.find(kind, picks[kind]);
+    if (item) Object.assign(draft, library.toChat(kind, item));
+    else picks[kind] = '';
+  }
+  photos.charPhoto = draft.charPhoto || '';
+  photos.userPhoto = draft.userPhoto || '';
+  const anyLib = Object.keys(KINDS).some((k) => lib[k].length);
   const s = openSheet({
     title: 'New chat',
     body:
-      chatFields(draft) +
-      `<div class="toggle-row"><div><div class="label">Save this chat on my phone</div><div class="hint">Off = the chat disappears when you close the app.</div></div>
+      chatFields(draft, { picks }) +
+      `<div class="toggle-row"><div><div class="label">Add new ones to my library</div><div class="hint">Characters or situations you write here get saved for next time.</div></div>
+        <input type="checkbox" id="f-toLib" checked aria-label="Add new ones to my library"></div>
+       <div class="toggle-row"><div><div class="label">Save this chat on my phone</div><div class="hint">Off = the chat disappears when you close the app.</div></div>
         <input type="checkbox" id="f-save" checked aria-label="Save this chat on my phone"></div>
-       ${prefill.charName ? '' : '<p><button class="link-btn" id="fill-example">Fill in the example (Mara)</button></p>'}`,
+       ${anyLib ? '' : '<p><button class="link-btn" id="fill-example">Fill in the example (Mara)</button></p>'}`,
     actions: '<button class="btn-primary" id="start-chat">Start chat</button>',
   });
+  const state = { picks, photos };
+  wirePickers(s.el, state, { clearOnNone: true });
   $('#fill-example', s.el)?.addEventListener('click', () => {
     for (const k of FIELD_KEYS) $('#f-' + k, s.el).value = EXAMPLE_CHAT[k];
   });
   $('#start-chat', s.el).addEventListener('click', () => {
     const f = readFields(s.el, FIELD_KEYS);
-    if (!f.charName.trim()) { toast('Give the character a name.'); return; }
+    if (!f.charName.trim()) { toast('Pick or write a character first.'); return; }
     if (!f.userName.trim()) f.userName = 'User';
     const chat = {
       v: 1,
@@ -271,6 +356,8 @@ function newChatSheet(prefill = {}) {
       created: Date.now(),
       updated: Date.now(),
       ...f,
+      charPhoto: state.picks.chars ? state.photos.charPhoto || '' : '',
+      userPhoto: state.picks.users ? state.photos.userPhoto || '' : '',
       chatInstructions: '',
       narratorInstructions: '',
       useGlobal: true,
@@ -279,6 +366,10 @@ function newChatSheet(prefill = {}) {
       direction: '',
       messages: [],
     };
+    // Remember which saved items this chat came from (its fields are its own copy).
+    for (const kind of Object.keys(KINDS)) if (state.picks[kind]) chat[MAP[kind].id] = state.picks[kind];
+    if ($('#f-toLib', s.el).checked) linkToLibrary(chat);
+    if ((chat.userCharId || '') !== (settings.lastUserCharId || '')) { settings.lastUserCharId = chat.userCharId || ''; saveSettings(); }
     if (f.openingMessage.trim()) {
       chat.messages.push({ id: uid(), role: 'char', versions: [fill(f.openingMessage.trim(), chat)], vi: 0, ts: Date.now() });
     }
@@ -293,7 +384,7 @@ function newChatSheet(prefill = {}) {
 function openChat(chat) {
   current = chat;
   $('#chat-name').textContent = chat.charName;
-  $('#chat-avatar').textContent = (chat.charName || '?')[0].toUpperCase();
+  $('#chat-avatar').innerHTML = avatarInner(chat.charName, chat.charPhoto);
   $('#chat-lock').hidden = chat.save !== false;
   $('#direction').value = chat.direction || '';
   updateDirection();
@@ -320,6 +411,7 @@ function renderMessages() {
     box.innerHTML = msgs.map((m, i) => messageHtml(m, i === lastCharIndex && i === msgs.length - 1)).join('');
   }
   $('#regenerate-label').textContent = lastMessage()?.role === 'char' ? 'Regenerate' : 'Reply';
+  $('#delete-last').disabled = !msgs.length;
 }
 
 function messageHtml(m, isLatestChar) {
@@ -333,10 +425,7 @@ function messageHtml(m, isLatestChar) {
       <button data-swipe="1" aria-label="Next version"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
     </span>`;
   }
-  const tools = streaming ? '' : `<div class="msg-tools">${swipes}
-      <button class="del-btn" data-del aria-label="Delete message">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
-      </button></div>`;
+  const tools = swipes ? `<div class="msg-tools">${swipes}</div>` : '';
   if (m.role === 'narrator') {
     return `<div class="msg narrator" data-id="${m.id}"><div class="narr-text${streaming ? ' typing' : ''}">${body}</div>${tools}</div>`;
   }
@@ -372,22 +461,20 @@ function swipe(m, dir) {
   renderMessages();
 }
 
-// One-tap delete, with Undo.
-$('#messages').addEventListener('click', (e) => {
-  const d = e.target.closest('[data-del]');
-  if (!d || gen) return;
+// Delete the last message (button in the action row), with Undo.
+$('#delete-last').addEventListener('click', () => {
+  if (gen || !current) return;
   const chat = current;
-  const i = chat.messages.findIndex((x) => x.id === d.closest('.msg').dataset.id);
-  if (i < 0) return;
-  const [removed] = chat.messages.splice(i, 1);
+  const removed = chat.messages.pop();
+  if (!removed) return;
   saveChat(chat);
   renderMessages();
-  toast('Message deleted.', 5000, {
+  toast('Last message deleted.', 5000, {
     label: 'Undo',
     onClick: () => {
-      chat.messages.splice(i, 0, removed);
+      chat.messages.push(removed);
       saveChat(chat);
-      if (current === chat) renderMessages();
+      if (current === chat) { renderMessages(); scrollToBottom(true); }
     },
   });
 });
@@ -472,38 +559,80 @@ function messageMenu(id) {
 }
 
 // Tap a message: edit it right where it is, or delete it.
+// The message stays where it was on screen while the editor opens and closes,
+// and the editor is kept in view when the keyboard comes up.
 let editingId = null;
+
+// Run `change` (which re-draws messages) without the message `id` moving on screen.
+function keepInPlace(id, change) {
+  const box = $('#messages');
+  const top = () => {
+    const el = id && $(`.msg[data-id="${id}"]`);
+    return el ? el.getBoundingClientRect().top - box.getBoundingClientRect().top : null;
+  };
+  const before = top();
+  change();
+  const after = top();
+  if (before !== null && after !== null) box.scrollTop += after - before;
+}
+
+// Editor height: fits its text, but never taller than the visible message area.
+function sizeEditor() {
+  const ta = $('#inline-text');
+  if (!ta) return;
+  const room = $('#messages').clientHeight - 24 - 44 - 8; // padding, buttons, gap
+  ta.style.height = 'auto';
+  ta.style.height = Math.max(96, Math.min(ta.scrollHeight + 4, room)) + 'px';
+}
+
+// Scroll just enough that the whole editor (text box and buttons) is visible.
+function keepEditorVisible() {
+  const box = $('#messages');
+  const el = editingId && $(`.msg[data-id="${editingId}"]`);
+  if (!el) return;
+  sizeEditor();
+  const b = box.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const pad = 8;
+  if (r.top < b.top + pad || r.height > b.height - pad * 2) box.scrollTop += r.top - b.top - pad;
+  else if (r.bottom > b.bottom - pad) box.scrollTop += r.bottom - b.bottom + pad;
+}
+
+function closeEditor(keepId) {
+  if (!editingId) return;
+  keepInPlace(keepId || editingId, () => renderMessages());
+}
+
 function startInlineEdit(id) {
   if (gen) return;
-  if (editingId) renderMessages(); // close any other open editor
+  if (editingId) closeEditor(id); // close any other open editor
   const m = current.messages.find((x) => x.id === id);
-  const el = $(`.msg[data-id="${id}"]`);
-  if (!m || !el) return;
-  editingId = id;
-  el.classList.add('editing');
-  $('#view-chat').classList.add('editing-mode'); // hide the bottom area to make room
-  el.innerHTML = `<div class="inline-editor">
-      <label class="sr-only" for="inline-text">Edit message</label>
-      <textarea id="inline-text">${escapeHtml(textOf(m))}</textarea>
-      <div class="inline-actions">
-        <button class="ie-btn danger" data-ie="delete">Delete</button>
-        <button class="ie-btn" data-ie="more">More</button>
-        <span class="ie-spacer"></span>
-        <button class="ie-btn" data-ie="cancel">Cancel</button>
-        <button class="ie-btn primary" data-ie="save">Save</button>
-      </div>
-    </div>`;
-  const ta = $('#inline-text', el);
-  const fit = () => {
-    const room = $('#messages').clientHeight - 80; // leave space for the buttons
-    ta.style.height = 'auto';
-    ta.style.height = Math.max(120, Math.min(ta.scrollHeight + 2, room)) + 'px';
-  };
-  if (window.visualViewport) visualViewport.addEventListener('resize', fit, { once: true });
-  ta.addEventListener('input', fit);
-  fit();
+  if (!m || !$(`.msg[data-id="${id}"]`)) return;
+  keepInPlace(id, () => {
+    const el = $(`.msg[data-id="${id}"]`);
+    editingId = id;
+    el.classList.add('editing');
+    $('#view-chat').classList.add('editing-mode'); // hide the bottom area to make room
+    el.innerHTML = `<div class="inline-editor">
+        <label class="sr-only" for="inline-text">Edit message</label>
+        <textarea id="inline-text">${escapeHtml(textOf(m))}</textarea>
+        <div class="inline-actions">
+          <button class="ie-btn danger" data-ie="delete">Delete</button>
+          <button class="ie-btn" data-ie="more">More</button>
+          <span class="ie-spacer"></span>
+          <button class="ie-btn" data-ie="cancel">Cancel</button>
+          <button class="ie-btn primary" data-ie="save">Save</button>
+        </div>
+      </div>`;
+    sizeEditor();
+  });
+  const ta = $('#inline-text');
+  ta.addEventListener('input', () => { sizeEditor(); keepEditorVisible(); });
   ta.focus({ preventScroll: true });
-  el.scrollIntoView({ block: 'nearest' });
+  keepEditorVisible();
+  // The keyboard slides up over ~0.3 s; check again once it has settled.
+  setTimeout(keepEditorVisible, 350);
+  setTimeout(keepEditorVisible, 700);
 }
 
 $('#messages').addEventListener('click', (e) => {
@@ -521,9 +650,12 @@ $('#messages').addEventListener('click', (e) => {
     if (!confirm('Delete this message?')) return;
     current.messages.splice(i, 1);
     saveChat(current);
+    const neighbor = current.messages[i] || current.messages[i - 1];
+    editingId = null;
+    keepInPlace(neighbor?.id, () => renderMessages());
+    return;
   }
-  editingId = null;
-  renderMessages();
+  closeEditor(id);
   if (act === 'more') messageMenu(id);
 });
 
@@ -706,11 +838,16 @@ async function generate(mode, opts = {}) {
 // ---------- Chat settings (⋯ or tap the name) ----------
 function chatSettingsSheet() {
   const c = current;
+  const picks = {};
+  for (const kind of Object.keys(KINDS)) picks[kind] = library.find(kind, c[MAP[kind].id]) ? c[MAP[kind].id] : '';
+  const state = { picks, photos: { charPhoto: c.charPhoto || '', userPhoto: c.userPhoto || '' } };
   const s = openSheet({
     title: 'Chat settings',
     body:
-      chatFields(c).replace(/<div class="field"><label for="f-openingMessage">[\s\S]*?<\/div>/, '') +
-      `<div class="group">
+      chatFields(c, { picks, opening: false, pickLabel: 'Swap in from your library' }) +
+      `<div class="toggle-row"><div><div class="label">Also save these changes to my library</div><div class="hint">Off = changes apply to this chat only.</div></div>
+        <input type="checkbox" id="f-updateLib" aria-label="Also save these changes to my library"></div>
+      <div class="group">
         <h2>Instructions</h2>
         <div class="field"><label for="f-chatInstructions">Instructions for this chat only</label>
           <textarea id="f-chatInstructions" rows="3" placeholder="Rules that apply only to this chat">${escapeHtml(c.chatInstructions || '')}</textarea></div>
@@ -729,18 +866,17 @@ function chatSettingsSheet() {
       </div>`,
     actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="save-chat-settings">Save</button>',
   });
+  wirePickers(s.el, state, { clearOnNone: false });
 
   $('#view-prompt', s.el).addEventListener('click', () => {
     const preview = { ...c, ...readFields(s.el, ['charName', 'charDescription', 'userName', 'userDescription', 'situation', 'chatInstructions', 'narratorInstructions', 'useGlobal']) };
     openSheet({ title: 'Full prompt', body: `<p class="hint">This is everything the model is told before the chat history. Nothing else is added except your "what happens next" direction.</p><pre class="prompt-view">${escapeHtml(systemPrompt(preview, settings))}</pre>` });
   });
 
-  $('#delete-chat', s.el).addEventListener('click', async () => {
-    if (!confirm(`Delete this chat with ${c.charName}? This can't be undone.`)) return;
-    chats.delete(c.id);
-    await store.del('chat:' + c.id);
+  $('#delete-chat', s.el).addEventListener('click', () => {
     s.close();
     location.hash = '#/';
+    deleteChat(c);
   });
 
   $('#save-chat-settings', s.el).addEventListener('click', async () => {
@@ -748,6 +884,26 @@ function chatSettingsSheet() {
     if (!f.charName.trim()) { toast('The character needs a name.'); return; }
     const wasSaved = c.save !== false;
     Object.assign(c, f);
+    // Swapped-in library items: link to them and use their photos.
+    for (const kind of Object.keys(KINDS)) {
+      if (state.picks[kind] && state.picks[kind] !== c[MAP[kind].id]) c[MAP[kind].id] = state.picks[kind];
+    }
+    c.charPhoto = state.photos.charPhoto || '';
+    c.userPhoto = state.photos.userPhoto || '';
+    if ($('#f-updateLib', s.el).checked) {
+      for (const kind of Object.keys(KINDS)) {
+        const id = c[MAP[kind].id];
+        if (library.find(kind, id)) {
+          const data = library.fromChat(kind, c);
+          if (kind === 'situations') delete data.name; // keep its short name
+          else if (!data.photo) delete data.photo;    // don't wipe a saved photo
+          if (kind === 'situations') delete data.openingMessage;
+          library.updateItem(kind, id, data);
+        } else {
+          linkToLibrary(c, [kind]);
+        }
+      }
+    }
     if (wasSaved && !c.save) await store.del('chat:' + c.id);
     saveChat(c, { now: true });
     s.close();
@@ -811,7 +967,18 @@ function renderSettings() {
     <div class="group">
       <button class="btn-danger wide" id="reset-settings">Reset writing and model settings to defaults</button>
       <p class="hint" style="margin-top:8px">Keeps your pod address and password.</p>
-    </div>`;
+    </div>
+    <div class="group">
+      <h2>Backup</h2>
+      <p class="hint" style="margin:0 0 10px">One file with your settings, characters and situations. Keep it somewhere safe, like iCloud Drive: iPhone can clear a web app's storage.</p>
+      <div class="toggle-row"><div><div class="label">Include chats</div><div class="hint">Chats set to "don't save" are never included.</div></div>
+        <input type="checkbox" id="b-chats" checked aria-label="Include chats"></div>
+      <div class="field" style="margin-top:12px"><label for="b-password">Password (optional)</label>
+        <input id="b-password" type="password" autocomplete="new-password" placeholder="Leave empty for no password">
+        <p class="hint">With a password, the file is encrypted and also keeps your pod address and password. Without one, those two are left out. There's no way to recover a forgotten password.</p></div>
+      <div class="row"><button class="btn-primary" id="b-download">Download backup</button><button class="btn-secondary" id="b-restore">Restore from file</button></div>
+    </div>
+    <p class="hint" style="text-align:center;margin:24px 0">App version ${APP_VERSION}</p>`;
 
   $('#settings-form').oninput = (e) => {
     const id = e.target.id;
@@ -828,6 +995,8 @@ function renderSettings() {
     st.className = 'status ' + (r.ok ? 'ok' : 'bad');
     st.textContent = r.message;
   };
+  $('#b-download').onclick = () => downloadBackup($('#b-chats').checked, $('#b-password').value);
+  $('#b-restore').onclick = () => $('#import-file').click();
   $('#reset-settings').onclick = async () => {
     if (!confirm('Reset instructions, banned phrases and model settings to the defaults?')) return;
     settings = { ...DEFAULT_SETTINGS, podUrl: settings.podUrl, password: settings.password };
@@ -838,6 +1007,95 @@ function renderSettings() {
 }
 $('#settings-back').addEventListener('click', () => (location.hash = '#/'));
 
+// ---------- Backup and restore ----------
+async function downloadBackup(includeChats, password) {
+  const btn = $('#b-download');
+  if (btn) btn.disabled = true;
+  try {
+    let data = buildBackup({
+      settings,
+      library: lib,
+      chats: [...chats.values()],
+      includeChats,
+      includePod: !!password,
+      appVersion: APP_VERSION,
+    });
+    if (password) data = await encryptBackup(data, password);
+    const date = new Date().toISOString().slice(0, 10);
+    const r = await saveFile(JSON.stringify(data), `companion-backup-${date}.json`);
+    if (r !== 'cancelled') toast(password ? 'Backup ready (password protected).' : 'Backup ready.');
+  } catch (e) {
+    toast("Couldn't make the backup: " + (e.message || e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function restoreBackup(file) {
+  if (!file.encrypted) return confirmRestore(file);
+  const s = openSheet({
+    title: 'Password-protected backup',
+    body: `<div class="field"><label for="r-password">Backup password</label>
+      <input id="r-password" type="password" autocomplete="current-password"></div>`,
+    actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="r-unlock">Unlock</button>',
+  });
+  setTimeout(() => $('#r-password', s.el).focus(), 50);
+  $('#r-unlock', s.el).addEventListener('click', async () => {
+    try {
+      const data = await decryptBackup(file, $('#r-password', s.el).value);
+      s.close();
+      confirmRestore(data);
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+}
+
+function confirmRestore(b) {
+  const L = b.library || {};
+  const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const parts = [
+    count((L.chars || []).length, 'AI character', 'AI characters'),
+    count((L.users || []).length, 'character for you', 'characters for you'),
+    count((L.situations || []).length, 'situation', 'situations'),
+    count((b.chats || []).length, 'chat', 'chats'),
+  ];
+  const when = b.created ? new Date(b.created).toLocaleString() : 'an unknown date';
+  const s = openSheet({
+    title: 'Restore backup',
+    body: `<p>Backup from ${escapeHtml(when)}:</p>
+      <ul class="plain-list">${parts.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}<li>Settings and instructions</li></ul>
+      <p class="hint">These are added to what's on this phone. Anything that's in both is replaced by the backup's version. Your current settings are replaced${b.settings && b.settings.podUrl ? '' : ', except your pod address and password, which stay as they are'}.</p>`,
+    actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="r-go">Restore</button>',
+  });
+  $('#r-go', s.el).addEventListener('click', async () => {
+    try {
+      if (b.settings && typeof b.settings === 'object') {
+        const keep = { podUrl: settings.podUrl, password: settings.password };
+        settings = { ...DEFAULT_SETTINGS, ...b.settings };
+        if (!b.settings.podUrl) Object.assign(settings, keep);
+        await saveSettings();
+      }
+      for (const kind of Object.keys(KINDS)) library.mergeItems(kind, L[kind]);
+      await library.saveLibrary();
+      for (const c of b.chats || []) {
+        if (!c || !c.id || !Array.isArray(c.messages)) continue;
+        c.save = true;
+        chats.set(c.id, c);
+        await store.set('chat:' + c.id, c);
+      }
+      s.close();
+      toast('Backup restored.');
+      if (location.hash === '#/settings') renderSettings();
+      else route();
+    } catch (e) {
+      toast("Couldn't restore: " + (e.message || e));
+    }
+  });
+}
+
+library.initLibrary({ onStartChat: (charId) => { location.hash = '#/'; newChatSheet({ chars: charId }); } });
+
 // ---------- Keyboard handling (iPhone) ----------
 // Keep the app exactly as tall as the visible area, so the composer sits
 // right above the keyboard and the latest messages stay in view.
@@ -846,7 +1104,8 @@ function fitToViewport() {
   const h = vv ? vv.height : window.innerHeight;
   document.documentElement.style.setProperty('--app-height', h + 'px');
   window.scrollTo(0, 0);
-  if (current) scrollToBottom();
+  if (editingId) keepEditorVisible();
+  else if (current) scrollToBottom();
 }
 if (window.visualViewport) {
   visualViewport.addEventListener('resize', fitToViewport);
