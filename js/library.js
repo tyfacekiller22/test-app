@@ -144,9 +144,13 @@ export function pickerHtml(kind, selectedId, label = 'Choose from your library')
 // ---------- Library screen ----------
 let tab = 'chars';
 let startChatWith = null; // set by app.js: (charId) => open New chat with that character
+let makePhoto = null;     // set by app.js: ({ kind, name, description, appearance }) => Promise<image Blob>
+let photoAvailable = () => false; // set by app.js: are pictures turned on?
 
-export function initLibrary({ onStartChat }) {
+export function initLibrary({ onStartChat, generatePhoto, canGeneratePhoto }) {
   startChatWith = onStartChat;
+  makePhoto = generatePhoto || null;
+  if (canGeneratePhoto) photoAvailable = canGeneratePhoto;
   $('#lib-tabs').addEventListener('click', (e) => {
     const b = e.target.closest('[data-tab]');
     if (!b) return;
@@ -186,6 +190,9 @@ function photoFieldHtml(name, photo) {
       <span id="photo-preview">${avatarHtml(name, photo, 'big')}</span>
       <div class="photo-btns">
         <button class="btn-secondary small" type="button" id="photo-pick">${photo ? 'Change photo' : 'Add photo'}</button>
+        ${makePhoto && photoAvailable() ? `<button class="btn-secondary small ai-gen" type="button" id="photo-gen">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>
+          <span>${photo ? 'Generate new photo' : 'Generate photo'}</span></button>` : ''}
         <button class="link-btn danger" type="button" id="photo-remove"${photo ? '' : ' hidden'}>Remove</button>
       </div>
       <input type="file" id="photo-file" accept="image/*" hidden>
@@ -240,6 +247,27 @@ export function editItemSheet(kind, item, { onSaved, prefill } = {}) {
       try { photo = await resizePhoto(f); showPhoto(); } catch { toast("Couldn't open that photo."); }
     });
     $('#photo-remove', s.el).addEventListener('click', () => { photo = ''; showPhoto(); });
+    // Generate a profile photo from the name, appearance and description in the form.
+    const gen = $('#photo-gen', s.el);
+    gen?.addEventListener('click', async () => {
+      const name = $('#li-name', s.el).value.trim();
+      const appearance = ($('#li-appearance', s.el)?.value || '').trim();
+      const description = ($('#li-description', s.el)?.value || '').trim();
+      if (!appearance && !description) { toast('Describe how they look first (Appearance).'); return; }
+      const label = $('span', gen);
+      gen.disabled = true; pick.disabled = true;
+      label.textContent = 'Generating…';
+      $('#photo-preview', s.el).innerHTML = '<span class="avatar big gen-wait"><span class="spinner"></span></span>';
+      try {
+        const blob = await makePhoto({ kind, name, description, appearance });
+        if (blob) { photo = await resizePhoto(blob); toast('Photo ready. Tap Save to keep it.'); }
+      } catch (e) {
+        if (e && e.message) toast(e.message, 6000);
+      }
+      gen.disabled = false; pick.disabled = false;
+      label.textContent = photo ? 'Generate new photo' : 'Generate photo';
+      showPhoto();
+    });
     $('#li-name', s.el).addEventListener('input', () => { if (!photo) showPhoto(); });
   }
 

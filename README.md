@@ -62,6 +62,23 @@ Changed 2026-10-11 (pictures, v13):
   away in Settings → Pictures → Image model. The chat model writes full-sentence descriptions for Z-Image and
   short phrases for SDXL. 8 steps, CFG 1. Needs the updated worker/worker.js (it passes --sdllm and --sdvae).
 
+Added 2026-10-11 (v14):
+- **Generate photo** for AI characters and your characters (Library → open one → ✦ Generate photo, also when saving
+  a Creator draft). The chat model writes a portrait description from Appearance + description, the image model
+  draws it. Chats whose character had no photo pick up the new one automatically.
+
+Added 2026-10-11 (v15):
+- Tapping a picture opens a full-screen **gallery of all the chat's pictures** (every version), starting at that one.
+  Swipe left/right to move through them, swipe down or ✕ to close. Save / New version / Edit / Delete work on the
+  picture you're looking at (Delete removes just that version, with Undo).
+
+Added 2026-10-11 (v16):
+- **Review descriptions before drawing** (Settings → Pictures, on by default): after tapping Picture (or Generate photo),
+  a sheet shows the scene, the moment and the description. Edit it, tap **Rewrite** for a new one, or **Draw**.
+  Closing the sheet cancels.
+- The screen stays awake while a picture or profile photo is being made (Screen Wake Lock; iPhone home-screen apps
+  support it from iOS 18.4).
+
 Coming in later stages: character/situation libraries (2), memory summaries, pinned memories, generated
 details, tech support helper, backups and spending (4).
 

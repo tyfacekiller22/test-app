@@ -330,6 +330,31 @@ export function parseImagePrompt(text, type = 'zimage') {
   return { scene, moment, prompt };
 }
 
+// ---------- Profile photos ----------
+export function portraitInstructions(type) {
+  const format = type === 'sdxl'
+    ? 'Write 25 to 50 words of comma-separated phrases: the person first (age, gender, hair, face, build, expression), then clothing, then the background, then "head and shoulders portrait".'
+    : 'Write 2 to 4 plain sentences (40 to 90 words): the person first (age, gender, hair, face, build, expression), then their clothing, then the background and lighting, ending with the framing (head-and-shoulders portrait, looking at the camera).';
+  return `You write a description for a photorealistic profile photo of one fictional person, for an image model.
+- Exactly one person, head and shoulders, facing the camera, natural expression that fits their personality.
+- Use the Appearance notes exactly. Fill in anything missing (age, gender, hair) from the description, choosing details that fit.
+- Give them clothing and a softly blurred background that fit who they are and what they do.
+- Never use their name: the image model doesn't know who anyone is.
+- ${format}
+Output only the description, with no label or quotes.`;
+}
+export function buildPortraitPrompt({ name, description, appearance }, type) {
+  const user = [
+    `Name (do not use in the description): ${name || 'unknown'}`,
+    `Appearance: ${appearance || 'not given'}`,
+    `About them: ${(description || 'not given').replace(/\{\{char\}\}/g, name || 'they').replace(/\{\{user\}\}/g, 'the user').slice(0, 1500)}`,
+  ].join('\n');
+  return [
+    { role: 'system', content: portraitInstructions(type) },
+    { role: 'user', content: user },
+  ];
+}
+
 // What's sent to the image model: the description, then the photo style from Settings.
 // SDXL only: the action (first phrase) gets a little extra weight.
 export function finalImagePrompt(prompt, style, type = 'zimage') {

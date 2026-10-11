@@ -25,7 +25,8 @@ export function toast(msg, ms = 3500, action = null) {
 }
 
 // ---------- Bottom sheets ----------
-export function openSheet({ title, body, actions = '' }) {
+// onClose: called once when the sheet closes (any way: ✕, tapping outside, or close()).
+export function openSheet({ title, body, actions = '', onClose = null }) {
   const root = $('#sheet-root');
   const scrim = document.createElement('div');
   scrim.className = 'scrim';
@@ -40,7 +41,8 @@ export function openSheet({ title, body, actions = '' }) {
       <div class="sheet-body">${body}</div>
       ${actions ? `<div class="sheet-actions">${actions}</div>` : ''}
     </div>`;
-  const close = () => scrim.remove();
+  let closed = false;
+  const close = () => { if (closed) return; closed = true; scrim.remove(); onClose?.(); };
   scrim.addEventListener('click', (e) => {
     if (e.target === scrim || e.target.closest('[data-close]')) close();
   });

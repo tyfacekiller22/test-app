@@ -176,6 +176,7 @@ export const DEFAULT_SETTINGS = {
   appKey: '',            // the APP_KEY you set in the Worker
   // Pictures: an image model loaded on the pod next to the chat model (empty link = pictures off).
   imagePreset: 'zimage',
+  reviewImagePrompt: true, // show the description for checking/editing before each picture is drawn
   ...presetFields('zimage'),
   lowBalanceWarning: 5,  // warn when the Runpod balance drops below this many dollars (0 = off)
   modelUrl: 'https://huggingface.co/bartowski/TheDrummer_Artemis-31B-v1.1-GGUF/resolve/main/TheDrummer_Artemis-31B-v1.1-Q6_K.gguf',
