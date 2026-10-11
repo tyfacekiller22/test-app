@@ -2,29 +2,81 @@
 // settings shows exactly this text.
 //
 // Order (later items override earlier ones):
-//   global instructions → AI character → user character → situation →
+//   global instructions → AI character(s) → user character → (group scene rules) → situation →
 //   chat-specific instructions → chat history → active "what happens next" direction
 
-export function fill(text, chat) {
+// ---------- Cast (one or more AI characters) ----------
+// The first character lives in the chat's own fields (charName, charDescription, charPhoto).
+// Extra characters for group scenes live in chat.extraChars: [{ key, charId, name, description, photo }].
+export function castOf(chat) {
+  const main = { key: 'main', name: chat.charName || 'Character', description: chat.charDescription || '', photo: chat.charPhoto || '', charId: chat.charId || '' };
+  const extras = (chat.extraChars || []).filter((c) => c && (c.name || '').trim());
+  return [main, ...extras];
+}
+export const isGroup = (chat) => castOf(chat).length > 1;
+
+// "Mara", "Mara and Jo", "Mara, Jo and Lee"
+export function joinNames(names) {
+  if (names.length <= 2) return names.join(' and ');
+  return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+}
+export const castNames = (chat) => joinNames(castOf(chat).map((c) => c.name));
+
+// Who wrote a character message. Falls back to the name saved on the message
+// (if that character was later removed), then to the first character.
+export function speakerOf(chat, m) {
+  const cast = castOf(chat);
+  return cast.find((c) => c.key === (m.speaker || 'main')) ||
+    (m.speakerName ? { key: m.speaker, name: m.speakerName, description: '', photo: '' } : cast[0]);
+}
+
+// {{char}} = the character (in a group: all of them, unless a name is given), {{user}} = you.
+export function fill(text, chat, charName) {
   return (text || '')
-    .replaceAll('{{char}}', chat.charName || 'Character')
+    .replaceAll('{{char}}', charName || (isGroup(chat) ? castNames(chat) : chat.charName || 'Character'))
     .replaceAll('{{user}}', chat.userName || 'User');
+}
+
+// Reads a leading "**Name:**" / "Name:" label off a group reply.
+// Returns { key, text } (key = null if no known name was found).
+// While streaming, a label that's still arriving is hidden.
+export function splitSpeaker(text, chat, { streaming = false } = {}) {
+  const t = text || '';
+  const m = t.match(/^\s*(?:\*\*)?\s*([^*\n:]{1,60}?)\s*(?:\*\*)?\s*:\s*(?:\*\*)?[ \t]*\n?/);
+  if (m) {
+    const name = m[1].trim().toLowerCase();
+    const c = castOf(chat).find((x) => x.name.trim().toLowerCase() === name);
+    if (c) return { key: c.key, text: t.slice(m[0].length) };
+  }
+  if (streaming && /^\s*(\*\*)?[^\n:*]{0,60}(\*\*)?\s*$/.test(t) && t.length < 64) return { key: null, text: '' };
+  return { key: null, text: t };
 }
 
 export function systemPrompt(chat, settings) {
   const parts = [];
+  const cast = castOf(chat);
+  const group = cast.length > 1;
   if (chat.useGlobal !== false && settings.globalInstructions?.trim()) {
-    parts.push(settings.globalInstructions.trim());
+    parts.push(fill(settings.globalInstructions.trim(), chat));
   }
-  if (chat.charDescription?.trim()) {
-    parts.push(`About ${chat.charName}\n${chat.charDescription.trim()}`);
+  for (const c of cast) {
+    if (c.description.trim()) parts.push(`About ${c.name}\n${fill(c.description.trim(), chat, c.name)}`);
   }
   if (chat.userDescription?.trim()) {
-    parts.push(`About ${chat.userName} (played by the user)\n${chat.userDescription.trim()}`);
+    parts.push(`About ${chat.userName} (played by the user)\n${fill(chat.userDescription.trim(), chat)}`);
   }
-  if (chat.situation?.trim()) parts.push(`Situation\n${chat.situation.trim()}`);
-  if (chat.chatInstructions?.trim()) parts.push(`Instructions for this chat\n${chat.chatInstructions.trim()}`);
-  return fill(parts.join('\n\n'), chat);
+  if (group) {
+    const names = cast.map((c) => c.name);
+    parts.push(
+      `Group scene\nYou play all of these characters: ${joinNames(names)}. ${chat.userName || 'User'} is played by the user.\n` +
+      `- Each reply is one character's turn. Start it with that character's name in bold and a colon, like **${names[0]}:**\n` +
+      `- Keep each character's voice, knowledge, opinions and goals distinct. They can disagree, talk to each other and have their own reasons.\n` +
+      `- Not everyone has to speak or be the focus. A character who isn't speaking doesn't need to be described.`
+    );
+  }
+  if (chat.situation?.trim()) parts.push(`Situation\n${fill(chat.situation.trim(), chat)}`);
+  if (chat.chatInstructions?.trim()) parts.push(`Instructions for this chat\n${fill(chat.chatInstructions.trim(), chat)}`);
+  return parts.join('\n\n');
 }
 
 // Current text of a message (messages can have several regenerated versions).
@@ -32,11 +84,12 @@ export const textOf = (m) => m.versions[m.vi ?? 0] ?? '';
 
 function historyAsMessages(chat, history) {
   const out = [];
+  const group = isGroup(chat);
   for (const m of history) {
     const t = textOf(m).trim();
     if (!t) continue;
     let role, content;
-    if (m.role === 'char') { role = 'assistant'; content = t; }
+    if (m.role === 'char') { role = 'assistant'; content = group ? `**${speakerOf(chat, m).name}:** ${t}` : t; }
     else if (m.role === 'narrator') { role = 'user'; content = `[Narrator: ${t}]`; }
     else { role = 'user'; content = t; }
     const last = out[out.length - 1];
@@ -62,7 +115,10 @@ function addUserNote(msgs, note) {
  * history: the messages before the one being generated.
  * Returns { messages, stop, trimmed } for the API.
  */
-export function buildRequest(chat, settings, history, mode, { focus = '' } = {}) {
+export function buildRequest(chat, settings, history, mode, { focus = '', speaker = null } = {}) {
+  const cast = castOf(chat);
+  const group = cast.length > 1;
+  const who = group && speaker ? cast.find((c) => c.key === speaker) : null;
   const system = systemPrompt(chat, settings);
   let hist = historyAsMessages(chat, history);
 
@@ -72,9 +128,15 @@ export function buildRequest(chat, settings, history, mode, { focus = '' } = {})
       `[Story direction from the user. Keep it in mind from now on and work it in naturally; don't quote it or treat it as dialogue: ${fill(chat.direction.trim(), chat)}]`
     );
   }
+  if (mode === 'reply' && group) {
+    notes.push(who
+      ? `[Write only ${who.name}'s next reply. Start with **${who.name}:**]`
+      : `[Write the next reply as whichever one of ${joinNames(cast.map((c) => c.name))} would most naturally speak now. Only one character. Start with their name, like **${cast[0].name}:**]`);
+  }
   const maxP = Number(settings.maxParagraphs) || 0;
   if (mode === 'reply' && maxP > 0) {
-    notes.push(fill(`[Keep {{char}}'s reply to ${maxP === 1 ? 'one short paragraph' : `at most ${maxP} short paragraphs`}.]`, chat));
+    const whose = group ? (who ? `${who.name}'s` : 'the') : `${chat.charName}'s`;
+    notes.push(`[Keep ${whose} reply to ${maxP === 1 ? 'one short paragraph' : `at most ${maxP} short paragraphs`}.]`);
   }
   if (mode === 'narrate') {
     const narr = (chat.narratorInstructions?.trim() || settings.narratorInstructions || '').trim();
@@ -109,9 +171,14 @@ export function buildRequest(chat, settings, history, mode, { focus = '' } = {})
   for (const n of notes) addUserNote(messages, n);
   if (messages[messages.length - 1].role !== 'user') addUserNote(messages, '[Continue.]');
 
-  const name = mode === 'writeForMe' ? chat.charName : chat.userName;
-  const stop = [`\n${name}:`, `\n**${name}:**`];
-  return { messages, stop, trimmed };
+  // Stop when the model starts writing someone else's turn.
+  let stop;
+  if (mode === 'writeForMe') stop = cast.flatMap((c) => [`\n${c.name}:`, `\n**${c.name}:**`]);
+  else {
+    stop = [`\n${chat.userName}:`, `\n**${chat.userName}:**`];
+    if (group && mode === 'reply') stop.push(...cast.map((c) => `\n**${c.name}:**`), ...cast.map((c) => `\n${c.name}:`));
+  }
+  return { messages, stop: stop.slice(0, 16), trimmed };
 }
 
 // Splits a reply into paragraphs. Uses blank lines if the model uses them,

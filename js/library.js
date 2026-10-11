@@ -192,9 +192,10 @@ function photoFieldHtml(name, photo) {
     </div>`;
 }
 
-export function editItemSheet(kind, item, { onSaved } = {}) {
+// prefill: field values to show instead of the saved ones (e.g. a draft from the Creator).
+export function editItemSheet(kind, item, { onSaved, prefill } = {}) {
   const isNew = !item;
-  const it = item || {};
+  const it = { ...(item || {}), ...(prefill || {}) };
   let photo = it.photo || '';
   const v = (k) => escapeHtml(it[k] || '');
   let body;
@@ -211,12 +212,12 @@ export function editItemSheet(kind, item, { onSaved } = {}) {
         <textarea id="li-description" rows="${kind === 'chars' ? 8 : 4}">${v('description')}</textarea>
         ${kind === 'chars' ? '<p class="hint">A couple of example lines in their voice help a lot.</p>' : '<p class="hint">Appearance, relationship, history: whatever the character should know about you.</p>'}</div>`;
   }
-  if (!isNew && kind === 'chars') body += `<div class="group"><button class="btn-secondary wide" id="li-start">Start a chat with ${v('name')}</button></div>`;
-  if (!isNew) body += `<div class="group"><button class="btn-danger wide" id="li-delete">Delete from library</button>
+  if (!isNew && !prefill && kind === 'chars') body += `<div class="group"><button class="btn-secondary wide" id="li-start">Start a chat with ${v('name')}</button></div>`;
+  if (!isNew && !prefill) body += `<div class="group"><button class="btn-danger wide" id="li-delete">Delete from library</button>
     <p class="hint" style="margin-top:8px">Chats that already use it keep their own copy.</p></div>`;
 
   const s = openSheet({
-    title: (isNew ? 'New ' : 'Edit ') + KINDS[kind].one.toLowerCase(),
+    title: (prefill ? (isNew ? 'Save new ' : 'Update ') : isNew ? 'New ' : 'Edit ') + KINDS[kind].one.toLowerCase(),
     body,
     actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="li-save">Save</button>',
   });
@@ -266,7 +267,7 @@ export function editItemSheet(kind, item, { onSaved } = {}) {
     const saved = isNew ? addItem(kind, data) : updateItem(kind, it.id, data);
     s.close();
     renderLibrary();
-    onSaved?.(saved);
     toast('Saved.');
+    onSaved?.(saved);
   });
 }

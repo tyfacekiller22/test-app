@@ -25,6 +25,20 @@ Stage 3 (pod control): Start/Stop on the main screen, "Waking up…" while the m
 auto-off after 15 idle minutes or 3 hours (runs in a free Cloudflare Worker, see worker/SETUP.md),
 a 2-minute warning banner with Keep on, and a monthly spending estimate.
 
+Added 2026-10-10:
+- **Clear conversation**: chat ⋯ settings (or long-press a chat on the Chats screen). Deletes the messages and
+  the "what happens next" direction, keeps characters, situation and instructions, and restarts from the
+  opening line if there is one. Undo is offered for a few seconds.
+- **Group chats**: in New chat or chat settings, tap "+ Add another character". One model plays everyone
+  (no extra cost). Each reply shows who's speaking. The "Reply from" names under the direction box make that
+  character reply (sending anything typed first); Send lets the model choose who speaks. Regenerate keeps the
+  same speaker.
+- **Creator** (✦ Create on the Chats screen, or ✦ in the Library): a conversation with your model that helps
+  you build AI characters, characters for you, situations, or a whole group. Drafts appear as cards:
+  "Review & save" opens the editor so you can check them before saving; if a draft has the same name as
+  something saved, you can update it or save it as new. "Rework something saved…" shares a library item with it.
+  Its instructions are editable in Settings → Creator instructions. Uses the same pod (pod must be on).
+
 Coming in later stages: character/situation libraries (2), memory summaries, pinned memories, generated
 details, tech support helper, backups and spending (4).
 
@@ -33,7 +47,8 @@ details, tech support helper, backups and spending (4).
 index.html            the page
 css/app.css           all the styling (light + dark mode)
 js/app.js             screens, buttons, chat logic
-js/prompt.js          builds exactly what the model is told
+js/prompt.js          builds exactly what the model is told (including group scenes)
+js/creator.js         the Creator screen (build characters and situations with AI)
 js/api.js             talks to KoboldCpp on the pod
 js/defaults.js        default instructions, banned phrases, sampler values, example character
 js/store.js           saves data on the device

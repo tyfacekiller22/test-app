@@ -4,7 +4,8 @@
 import * as store from './store.js';
 import { DEFAULT_SETTINGS, EXAMPLE_CHAT, SETTINGS_VERSION } from './defaults.js';
 import { streamChat, abortGeneration, testConnection, ApiError } from './api.js';
-import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs, trimIncomplete } from './prompt.js';
+import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs, trimIncomplete, castOf, isGroup, castNames, speakerOf, splitSpeaker } from './prompt.js';
+import { initCreator, renderCreator, scrollCreatorToBottom } from './creator.js';
 import { parseImport } from './importer.js';
 import { podControlEnabled, getStatus, startPod, stopPod, keepAlive, recordSession, monthTotal, fmtDuration } from './pod.js';
 import { renderText, escapeHtml, timeAgo } from './format.js';
@@ -13,7 +14,7 @@ import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 7; // bump with CACHE in sw.js on each update
+const APP_VERSION = 8; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -62,7 +63,16 @@ async function loadAll() {
 
 // ---------- Routing ----------
 function show(view) {
-  for (const v of ['home', 'chat', 'settings', 'library']) $('#view-' + v).hidden = v !== view;
+  for (const v of ['home', 'chat', 'settings', 'library', 'creator']) $('#view-' + v).hidden = v !== view;
+}
+
+// A chat's display name: "Mara", or "Mara and Jo" for a group.
+const chatTitle = (c) => (isGroup(c) ? castNames(c) : c.charName);
+// Avatar(s) for a chat: one, or two overlapping for a group.
+function chatAvatarInner(c) {
+  const cast = castOf(c);
+  if (cast.length < 2) return avatarInner(c.charName, c.charPhoto);
+  return cast.slice(0, 2).map((x) => `<span class="avatar mini">${avatarInner(x.name, x.photo)}</span>`).join('');
 }
 
 function route() {
@@ -73,6 +83,9 @@ function route() {
   } else if (hash === '#/library') {
     library.renderLibrary();
     show('library');
+  } else if (hash === '#/create') {
+    renderCreator();
+    show('creator');
   } else if (hash === '#/settings') {
     renderSettings();
     show('settings');
@@ -83,7 +96,11 @@ function route() {
     if (typeof renderPod === 'function') { renderPod(); refreshPod().then(schedulePoll); }
   }
 }
-window.addEventListener('hashchange', route);
+let prevHash = '#/';
+window.addEventListener('hashchange', (e) => {
+  try { prevHash = new URL(e.oldURL).hash || '#/'; } catch { prevHash = '#/'; }
+  route();
+});
 
 // ---------- Home ----------
 let homeEditing = false;
@@ -98,16 +115,16 @@ function renderHome() {
       const last = [...c.messages].reverse().find((m) => textOf(m).trim());
       const snippet = last ? textOf(last).replace(/\*/g, '') : c.situation || '';
       return `<li class="chat-row"><button class="chat-item" data-id="${c.id}">
-        ${avatarHtml(c.charName, c.charPhoto)}
+        <span class="avatar${isGroup(c) ? ' stack' : ''}">${chatAvatarInner(c)}</span>
         <span class="chat-item-body">
           <span class="chat-item-top">
-            <span class="chat-item-name">${escapeHtml(c.charName)}${c.save === false ? ' · not saved' : ''}</span>
+            <span class="chat-item-name">${escapeHtml(chatTitle(c))}${c.save === false ? ' · not saved' : ''}</span>
             <span class="chat-item-time">${timeAgo(c.updated)}</span>
           </span>
           <span class="chat-item-snippet">${escapeHtml(fill(snippet, c))}</span>
         </span>
       </button>
-      <button class="row-delete" data-delete-chat="${c.id}" aria-label="Delete chat with ${escapeHtml(c.charName)}">Delete</button></li>`;
+      <button class="row-delete" data-delete-chat="${c.id}" aria-label="Delete chat with ${escapeHtml(chatTitle(c))}">Delete</button></li>`;
     })
     .join('');
 }
@@ -127,7 +144,7 @@ async function deleteChat(c) {
   try { await store.del('chat:' + c.id); } catch { /* already gone */ }
   if (current === c) current = null;
   if (location.hash === '#/' || location.hash === '') renderHome();
-  toast(`Deleted chat with ${c.charName}.`, 6000, {
+  toast(`Deleted chat with ${chatTitle(c)}.`, 6000, {
     label: 'Undo',
     onClick: () => {
       chats.set(c.id, c);
@@ -141,9 +158,10 @@ const wasLongPress = onLongPress($('#chat-list'), '.chat-item', (b) => {
   const c = chats.get(b.dataset.id);
   if (!c) return;
   const s = openSheet({
-    title: c.charName,
+    title: chatTitle(c),
     body: `<ul class="menu">
       <li><button data-act="open">Open chat</button></li>
+      <li><button data-act="clear" class="danger">Clear conversation</button></li>
       <li><button data-act="delete" class="danger">Delete chat</button></li>
     </ul>`,
   });
@@ -152,6 +170,10 @@ const wasLongPress = onLongPress($('#chat-list'), '.chat-item', (b) => {
     if (!act) return;
     s.close();
     if (act === 'open') location.hash = '#/chat/' + c.id;
+    if (act === 'clear' && confirm(`Clear the conversation with ${chatTitle(c)}? All messages are deleted. Characters, situation and instructions stay.`)) {
+      clearConversation(c);
+      renderHome();
+    }
     if (act === 'delete') deleteChat(c);
   });
 });
@@ -168,6 +190,8 @@ $('#open-library').addEventListener('click', () => (location.hash = '#/library')
 $('#library-back').addEventListener('click', () => (location.hash = '#/'));
 $('#open-settings').addEventListener('click', () => (location.hash = '#/settings'));
 $('#new-chat').addEventListener('click', () => newChatSheet());
+$('#open-creator').addEventListener('click', () => (location.hash = '#/create'));
+$('#lib-create').addEventListener('click', () => (location.hash = '#/create'));
 $('#try-example').addEventListener('click', () => {
   const pre = {};
   for (const kind of Object.keys(KINDS)) pre[kind] = (library.sorted(kind)[0] || {}).id || '';
@@ -260,14 +284,18 @@ function linkToLibrary(chat, kinds = ['chars', 'users', 'situations']) {
 // picks: { chars, users, situations } = selected library ids (or '' for none).
 function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
   const v = (k) => escapeHtml(c[k] || '');
+  const extras = c.extraChars || [];
   return `
     <div class="group" style="margin-top:4px">
-      <h2>AI character</h2>
+      <h2 id="chars-heading">${extras.length ? 'AI characters' : 'AI character'}</h2>
       ${library.pickerHtml('chars', picks.chars, pickLabel)}
       <div class="field"><label for="f-charName">Name</label><input id="f-charName" type="text" value="${v('charName')}" autocomplete="off"></div>
       <div class="field"><label for="f-charDescription">Personality, background, how they talk</label>
         <textarea id="f-charDescription" rows="6">${v('charDescription')}</textarea>
         <p class="hint">A couple of example lines in their voice help a lot.</p></div>
+      <div id="extra-chars">${extras.map((x, i) => extraCharHtml(x, i)).join('')}</div>
+      <button class="btn-secondary small" type="button" id="add-char">+ Add another character</button>
+      <p class="hint" style="margin-top:6px">For a group scene. The same model plays everyone, so there's no extra cost; replies just start a little slower.</p>
     </div>
     <div class="group">
       <h2>You</h2>
@@ -283,6 +311,91 @@ function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
     </div>
     <p class="hint">Tip: write {{char}} and {{user}} to stand in for the two names.</p>`;
 }
+// One extra character (group scenes) in the setup sheets.
+function extraCharHtml(x, i) {
+  const k = escapeHtml(x.key);
+  const items = library.sorted('chars');
+  const pick = items.length ? `<div class="field picker"><label for="xp-${k}">Choose from your library</label>
+      <select id="xp-${k}" class="x-pick"><option value="">Write a new character</option>
+      ${items.map((it) => `<option value="${it.id}"${it.id === x.charId ? ' selected' : ''}>${escapeHtml(it.name || 'Untitled')}</option>`).join('')}
+      </select></div>` : '';
+  return `<div class="extra-char" data-key="${k}">
+      <div class="extra-head"><span class="extra-title">Character ${i + 2}</span>
+        <button type="button" class="link-btn danger" data-remove-char>Remove</button></div>
+      ${pick}
+      <div class="field"><label for="xn-${k}">Name</label><input id="xn-${k}" class="x-name" type="text" value="${escapeHtml(x.name || '')}" autocomplete="off"></div>
+      <div class="field"><label for="xd-${k}">Personality, background, how they talk</label>
+        <textarea id="xd-${k}" class="x-desc" rows="5">${escapeHtml(x.description || '')}</textarea></div>
+    </div>`;
+}
+
+// Hooks up "+ Add another character", Remove, and the library pickers for extra characters.
+// state.extras: { [key]: { charId, photo } } for the blocks on screen.
+function wireExtras(root, state) {
+  const box = $('#extra-chars', root);
+  const renumber = () => {
+    const blocks = [...box.querySelectorAll('.extra-char')];
+    blocks.forEach((b, i) => ($('.extra-title', b).textContent = `Character ${i + 2}`));
+    $('#chars-heading', root).textContent = blocks.length ? 'AI characters' : 'AI character';
+  };
+  $('#add-char', root).addEventListener('click', () => {
+    const x = { key: uid(), name: '', description: '' };
+    state.extras[x.key] = { charId: '', photo: '' };
+    box.insertAdjacentHTML('beforeend', extraCharHtml(x, box.children.length));
+    renumber();
+    const block = box.lastElementChild;
+    ($('.x-pick', block) || $('.x-name', block)).focus();
+  });
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-remove-char]');
+    if (!b) return;
+    const block = b.closest('.extra-char');
+    delete state.extras[block.dataset.key];
+    block.remove();
+    renumber();
+  });
+  box.addEventListener('change', (e) => {
+    const sel = e.target.closest('.x-pick');
+    if (!sel) return;
+    const block = sel.closest('.extra-char');
+    const st = state.extras[block.dataset.key] || (state.extras[block.dataset.key] = {});
+    const item = library.find('chars', sel.value);
+    st.charId = item ? item.id : '';
+    st.photo = item ? item.photo || '' : '';
+    if (item) {
+      $('.x-name', block).value = item.name || '';
+      $('.x-desc', block).value = item.description || '';
+    }
+  });
+}
+
+// Reads the extra characters back from the sheet (blank ones are dropped).
+function readExtras(root, state) {
+  return [...root.querySelectorAll('.extra-char')].map((b) => {
+    const st = state.extras[b.dataset.key] || {};
+    return {
+      key: b.dataset.key,
+      charId: st.charId || '',
+      photo: st.charId ? st.photo || '' : '',
+      name: $('.x-name', b).value.trim(),
+      description: $('.x-desc', b).value.trim(),
+    };
+  }).filter((x) => x.name);
+}
+
+// Saves extra characters to the library (or links to an identical saved one).
+function linkExtrasToLibrary(chat, { update = false } = {}) {
+  for (const x of chat.extraChars || []) {
+    const item = library.find('chars', x.charId);
+    if (item) {
+      if (update) library.updateItem('chars', item.id, { name: x.name, description: x.description });
+      continue;
+    }
+    const same = library.sameAs('chars', { charName: x.name, charDescription: x.description });
+    x.charId = (same || library.addItem('chars', { name: x.name, description: x.description, photo: '' })).id;
+  }
+}
+
 const FIELD_KEYS = ['charName', 'charDescription', 'userName', 'userDescription', 'situation', 'openingMessage'];
 function readFields(root, keys) {
   const out = {};
@@ -345,8 +458,9 @@ function newChatSheet(pre = {}) {
        ${anyLib ? '' : '<p><button class="link-btn" id="fill-example">Fill in the example (Mara)</button></p>'}`,
     actions: '<button class="btn-primary" id="start-chat">Start chat</button>',
   });
-  const state = { picks, photos };
+  const state = { picks, photos, extras: {} };
   wirePickers(s.el, state, { clearOnNone: true });
+  wireExtras(s.el, state);
   $('#fill-example', s.el)?.addEventListener('click', () => {
     for (const k of FIELD_KEYS) $('#f-' + k, s.el).value = EXAMPLE_CHAT[k];
   });
@@ -368,14 +482,15 @@ function newChatSheet(pre = {}) {
       save: $('#f-save', s.el).checked,
       auto: true,
       direction: '',
+      extraChars: readExtras(s.el, state),
       messages: [],
     };
     // Remember which saved items this chat came from (its fields are its own copy).
     for (const kind of Object.keys(KINDS)) if (state.picks[kind]) chat[MAP[kind].id] = state.picks[kind];
-    if ($('#f-toLib', s.el).checked) linkToLibrary(chat);
+    if ($('#f-toLib', s.el).checked) { linkToLibrary(chat); linkExtrasToLibrary(chat); }
     if ((chat.userCharId || '') !== (settings.lastUserCharId || '')) { settings.lastUserCharId = chat.userCharId || ''; saveSettings(); }
     if (f.openingMessage.trim()) {
-      chat.messages.push({ id: uid(), role: 'char', versions: [fill(f.openingMessage.trim(), chat)], vi: 0, ts: Date.now() });
+      chat.messages.push(openingMessageFor(chat));
     }
     chats.set(chat.id, chat);
     saveChat(chat, { now: true });
@@ -384,11 +499,19 @@ function newChatSheet(pre = {}) {
   });
 }
 
+// The situation's opening line, as the first character's message.
+function openingMessageFor(chat) {
+  const text = fill((chat.openingMessage || '').trim(), chat, chat.charName);
+  return { id: uid(), role: 'char', speaker: 'main', speakerName: chat.charName, versions: [text], vi: 0, ts: Date.now() };
+}
+
 // ---------- Chat screen ----------
 function openChat(chat) {
   current = chat;
-  $('#chat-name').textContent = chat.charName;
-  $('#chat-avatar').innerHTML = avatarInner(chat.charName, chat.charPhoto);
+  $('#chat-name').textContent = chatTitle(chat);
+  $('#chat-avatar').innerHTML = chatAvatarInner(chat);
+  $('#chat-avatar').classList.toggle('stack', isGroup(chat));
+  renderSpeakers();
   $('#chat-lock').hidden = chat.save !== false;
   $('#direction').value = chat.direction || '';
   updateDirection();
@@ -408,7 +531,7 @@ function renderMessages() {
   const box = $('#messages');
   const msgs = current.messages;
   if (!msgs.length) {
-    box.innerHTML = `<p class="notice">Say something to ${escapeHtml(current.charName)}, or tap Narrate to set the scene.<br>Tip: tap any message to edit or delete it.</p>`;
+    box.innerHTML = `<p class="notice">Say something to ${escapeHtml(chatTitle(current))}, or tap Narrate to set the scene.<br>${isGroup(current) ? 'Tap a name under the direction box to choose who replies. ' : ''}Tip: tap any message to edit or delete it.</p>`;
   } else {
     let lastCharIndex = -1;
     msgs.forEach((m, i) => { if (m.role === 'char') lastCharIndex = i; });
@@ -433,13 +556,50 @@ function messageHtml(m, isLatestChar) {
   if (m.role === 'narrator') {
     return `<div class="msg narrator" data-id="${m.id}"><div class="narr-text${streaming ? ' typing' : ''}">${body}</div>${tools}</div>`;
   }
-  return `<div class="msg ${m.role}" data-id="${m.id}">
+  return `<div class="msg ${m.role}" data-id="${m.id}">${m.role === 'char' && isGroup(current) ? speakerHtml(m, streaming) : ''}
     <div class="bubble${streaming ? ' typing' : ''}">${body}</div>${tools}</div>`;
 }
+
+// Name (and small photo) above a character's bubble in a group chat.
+function speakerHtml(m, streaming) {
+  const waiting = streaming && !m.speaker; // the model hasn't said who's speaking yet
+  const who = speakerOf(current, m);
+  const n = Math.max(0, castOf(current).findIndex((c) => c.key === who.key));
+  return `<div class="speaker sp${n % 5}">${waiting ? '…' : `${avatarHtml(who.name, who.photo, 'xs')}<span>${escapeHtml(who.name)}</span>`}</div>`;
+}
+
+// Group chats: a row of names under the direction box. Tap one to have that character reply.
+function renderSpeakers() {
+  const row = $('#speakers');
+  const cast = current && isGroup(current) ? castOf(current) : [];
+  row.hidden = !cast.length;
+  $('#speaker-chips').innerHTML = cast.map((c, i) =>
+    `<button class="speaker-chip sp${i % 5}" data-speaker="${escapeHtml(c.key)}">${avatarHtml(c.name, c.photo, 'xs')}<span>${escapeHtml(c.name)}</span></button>`).join('');
+}
+$('#speaker-chips').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-speaker]');
+  if (!b || gen || !current) return;
+  // Sends what's in the message box (if anything), then that character replies.
+  const box = $('#message');
+  const text = box.value.trim();
+  if (text) {
+    current.messages.push({ id: uid(), role: 'user', versions: [text], vi: 0, ts: Date.now() });
+    box.value = '';
+    saveChat(current);
+    renderMessages();
+    scrollToBottom(true);
+  }
+  generate('reply', { speaker: b.dataset.speaker });
+});
 
 function updateStreaming(m) {
   const el = $(`.msg[data-id="${m.id}"]`);
   if (!el) return renderMessages();
+  if (m.role === 'char' && isGroup(current) && el.dataset.sp !== String(m.speaker || '')) {
+    el.dataset.sp = String(m.speaker || '');
+    const sp = $('.speaker', el);
+    if (sp) sp.outerHTML = speakerHtml(m, true);
+  }
   const target = m.role === 'narrator' ? $('.narr-text', el) : $('.bubble', el);
   const nearBottom = isNearBottom();
   target.innerHTML = renderText(textOf(m));
@@ -541,7 +701,7 @@ function messageMenu(id) {
   const m = current.messages[i];
   const isLast = i === current.messages.length - 1;
   const s = openSheet({
-    title: m.role === 'user' ? 'Your message' : m.role === 'narrator' ? 'Narration' : current.charName + "'s message",
+    title: m.role === 'user' ? 'Your message' : m.role === 'narrator' ? 'Narration' : speakerOf(current, m).name + "'s message",
     body: `<ul class="menu">
       <li><button data-act="edit">Edit</button></li>
       <li><button data-act="copy">Copy text</button></li>
@@ -773,6 +933,7 @@ async function generate(mode, opts = {}) {
   let history = msgs;
   let apiMode = mode;
 
+  const group = isGroup(chat);
   if (mode === 'regenerate' || mode === 'renarrate') {
     target = msgs[msgs.length - 1];
     if (!target || target.role === 'user') return generate('reply');
@@ -780,10 +941,19 @@ async function generate(mode, opts = {}) {
     target.versions.push('');
     target.vi = target.versions.length - 1;
     apiMode = target.role === 'narrator' ? 'narrate' : 'reply';
+    // Group chats: a new version comes from the same character.
+    if (group && target.role === 'char' && castOf(chat).some((c) => c.key === (target.speaker || 'main'))) opts = { ...opts, speaker: target.speaker || 'main' };
   } else if (mode === 'reply' || mode === 'narrate') {
     target = { id: uid(), role: mode === 'narrate' ? 'narrator' : 'char', versions: [''], vi: 0, ts: Date.now() };
+    if (target.role === 'char') {
+      // One character: always them. Group: the one you picked, or (Send) whoever the model chooses.
+      const pick = group ? opts.speaker : 'main';
+      if (pick) { target.speaker = pick; target.speakerName = castOf(chat).find((c) => c.key === pick)?.name; }
+    }
     msgs.push(target);
   }
+  const groupReply = group && target?.role === 'char';
+  const forced = !!(groupReply && opts.speaker);
 
   const { messages, stop, trimmed } = buildRequest(chat, settings, history, apiMode, opts);
   const controller = new AbortController();
@@ -801,6 +971,12 @@ async function generate(mode, opts = {}) {
       signal: controller.signal,
       stop,
       onText: (t) => {
+        // Group chats: read (and hide) the "**Name:**" the reply starts with.
+        if (groupReply) {
+          const sp = splitSpeaker(t, chat, { streaming: true });
+          if (sp.key && !forced && target.speaker !== sp.key) { target.speaker = sp.key; target.speakerName = speakerOf(chat, target).name; }
+          t = sp.text;
+        }
         // Reply too long: stop as soon as an extra paragraph starts.
         if (maxP && paragraphs(t).length > maxP && !controller.signal.aborted) {
           controller.abort();
@@ -820,6 +996,13 @@ async function generate(mode, opts = {}) {
     if (!(e instanceof ApiError && e.kind === 'aborted')) toast(e.message || 'Something went wrong.');
   }
 
+  if (groupReply) {
+    const sp = splitSpeaker(text, chat);
+    if (sp.key && !forced) target.speaker = sp.key;
+    if (!target.speaker) target.speaker = 'main';
+    target.speakerName = speakerOf(chat, target).name;
+    text = sp.text;
+  }
   text = cutParagraphs(tidy(text, chat, apiMode), maxP);
   // Cut off by the length limit? End on the last complete sentence instead.
   // (If you pressed Stop yourself, the text is left exactly as it was.)
@@ -852,7 +1035,8 @@ function chatSettingsSheet() {
   const c = current;
   const picks = {};
   for (const kind of Object.keys(KINDS)) picks[kind] = library.find(kind, c[MAP[kind].id]) ? c[MAP[kind].id] : '';
-  const state = { picks, photos: { charPhoto: c.charPhoto || '', userPhoto: c.userPhoto || '' } };
+  const state = { picks, photos: { charPhoto: c.charPhoto || '', userPhoto: c.userPhoto || '' }, extras: {} };
+  for (const x of c.extraChars || []) state.extras[x.key] = { charId: x.charId || '', photo: x.photo || '' };
   const s = openSheet({
     title: 'Chat settings',
     body:
@@ -874,14 +1058,17 @@ function chatSettingsSheet() {
         <button class="btn-secondary wide" id="view-prompt">View full prompt</button>
       </div>
       <div class="group">
+        <button class="btn-danger wide" id="clear-chat">Clear conversation</button>
+        <p class="hint" style="margin:8px 0 14px">Deletes all messages and starts the story over${c.openingMessage?.trim() ? ' from the opening line' : ''}. Characters, situation and instructions stay.</p>
         <button class="btn-danger wide" id="delete-chat">Delete chat</button>
       </div>`,
     actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="save-chat-settings">Save</button>',
   });
   wirePickers(s.el, state, { clearOnNone: false });
+  wireExtras(s.el, state);
 
   $('#view-prompt', s.el).addEventListener('click', () => {
-    const preview = { ...c, ...readFields(s.el, ['charName', 'charDescription', 'userName', 'userDescription', 'situation', 'chatInstructions', 'narratorInstructions', 'useGlobal']) };
+    const preview = { ...c, ...readFields(s.el, ['charName', 'charDescription', 'userName', 'userDescription', 'situation', 'chatInstructions', 'narratorInstructions', 'useGlobal']), extraChars: readExtras(s.el, state) };
     openSheet({ title: 'Full prompt', body: `<p class="hint">This is everything the model is told before the chat history. Nothing else is added except your "what happens next" direction.</p><pre class="prompt-view">${escapeHtml(systemPrompt(preview, settings))}</pre>` });
   });
 
@@ -891,11 +1078,19 @@ function chatSettingsSheet() {
     deleteChat(c);
   });
 
+  $('#clear-chat', s.el).addEventListener('click', () => {
+    if (gen) { toast('Wait for the reply to finish (or tap Stop) first.'); return; }
+    if (!confirm('Clear this conversation? All messages are deleted. Characters, situation and instructions stay.')) return;
+    s.close();
+    clearConversation(c);
+  });
+
   $('#save-chat-settings', s.el).addEventListener('click', async () => {
     const f = readFields(s.el, ['charName', 'charDescription', 'userName', 'userDescription', 'situation', 'chatInstructions', 'narratorInstructions', 'useGlobal', 'save']);
     if (!f.charName.trim()) { toast('The character needs a name.'); return; }
     const wasSaved = c.save !== false;
     Object.assign(c, f);
+    c.extraChars = readExtras(s.el, state);
     // Swapped-in library items: link to them and use their photos.
     for (const kind of Object.keys(KINDS)) {
       if (state.picks[kind] && state.picks[kind] !== c[MAP[kind].id]) c[MAP[kind].id] = state.picks[kind];
@@ -915,6 +1110,7 @@ function chatSettingsSheet() {
           linkToLibrary(c, [kind]);
         }
       }
+      linkExtrasToLibrary(c, { update: true });
     }
     if (wasSaved && !c.save) await store.del('chat:' + c.id);
     saveChat(c, { now: true });
@@ -922,6 +1118,24 @@ function chatSettingsSheet() {
     openChat(c);
   });
 }
+// Clear conversation: delete every message (and the direction), keep the setup. Undo restores it.
+function clearConversation(chat) {
+  const before = { messages: chat.messages, direction: chat.direction || '' };
+  chat.messages = chat.openingMessage?.trim() ? [openingMessageFor(chat)] : [];
+  chat.direction = '';
+  saveChat(chat, { now: true });
+  if (current === chat) openChat(chat);
+  toast('Conversation cleared.', 8000, {
+    label: 'Undo',
+    onClick: () => {
+      Object.assign(chat, before);
+      saveChat(chat, { now: true });
+      if (current === chat) openChat(chat);
+      else if (!current) renderHome();
+    },
+  });
+}
+
 $('#chat-more').addEventListener('click', chatSettingsSheet);
 $('#chat-title').addEventListener('click', chatSettingsSheet);
 $('#chat-back').addEventListener('click', () => (location.hash = '#/'));
@@ -976,6 +1190,12 @@ function renderSettings() {
         <p class="hint">Rules for every chat. {{char}} and {{user}} become the names.</p></div>
       <div class="field"><label for="s-narratorInstructions">Default narrator instructions</label>
         <textarea id="s-narratorInstructions" rows="3">${v('narratorInstructions')}</textarea></div>
+    </div>
+    <div class="group">
+      <h2>Creator instructions</h2>
+      <div class="field"><label for="s-creatorInstructions" class="sr-only">Creator instructions</label>
+        <textarea id="s-creatorInstructions" rows="10">${v('creatorInstructions')}</textarea>
+        <p class="hint">How the Creator (the ✦ Create screen) works with you. Your library's names are added after this.</p></div>
     </div>
     <div class="group">
       <h2>Banned phrases</h2>
@@ -1141,6 +1361,16 @@ function confirmRestore(b) {
 }
 
 library.initLibrary({ onStartChat: (charId) => { location.hash = '#/'; newChatSheet({ chars: charId }); } });
+initCreator({
+  getSettings: () => settings,
+  apiSettings: () => apiSettings(),
+  // Same rule as chats: with pod control, the pod has to be ready.
+  readyMessage: () => (podControlEnabled(settings) && !podState?.ready
+    ? (podState ? 'The pod is still waking up. Try again in a moment.' : 'The pod is off. Start it on the Chats screen.')
+    : ''),
+  startChat: (charId) => { location.hash = '#/'; newChatSheet({ chars: charId }); },
+  back: () => (location.hash = prevHash === '#/library' ? '#/library' : '#/'),
+});
 
 // ---------- Pod control (start/stop, waking up, auto-off countdown) ----------
 let podState = null;        // latest pod info from the Worker (null = off or unknown)
@@ -1301,6 +1531,7 @@ function fitToViewport() {
   if (keepSheetFieldVisible()) return;
   if (editingId) keepEditorVisible();
   else if (current) scrollToBottom();
+  else if (!$('#view-creator').hidden) scrollCreatorToBottom();
 }
 
 // When typing inside a bottom sheet (e.g. the character editor), scroll the field
