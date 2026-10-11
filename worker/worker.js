@@ -166,6 +166,9 @@ async function start(env, body) {
     '--password', body.password,
     // Pictures: also load an image model (SDXL) next to the chat model.
     ...(/^https:\/\/\S+$/.test(body.imageModelUrl || '') ? ['--sdmodel', body.imageModelUrl] : []),
+    // Newer image models (Z-Image, Flux) also need a text encoder and a VAE.
+    ...(body.imageModelUrl && /^https:\/\/\S+$/.test(body.imageTextEncoderUrl || '') ? ['--sdllm', body.imageTextEncoderUrl] : []),
+    ...(body.imageModelUrl && /^https:\/\/\S+$/.test(body.imageVaeUrl || '') ? ['--sdvae', body.imageVaeUrl] : []),
   ].join(' ');
   const gpus = Array.isArray(body.gpus) && body.gpus.length ? body.gpus : DEFAULT_GPUS;
   const tried = [];

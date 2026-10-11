@@ -231,29 +231,46 @@ export function tidy(text, chat, mode) {
 // image model can draw. Image models don't know who anyone is, so names are replaced
 // by short descriptions of how people look. The action comes first: image models pay
 // the most attention to the start of the prompt.
-export const IMAGE_PROMPT_INSTRUCTIONS = `You turn the current moment of a story into a prompt for a photorealistic image model. You are not continuing the story.
+// Shared part of the instructions; the Prompt format depends on the image model.
+const IMAGE_STEPS = `You turn the current moment of a story into a prompt for a photorealistic image model. You are not continuing the story.
 
 Work in two steps.
 1. Scene: read the whole story you're given and work out where things stand now: the current location (it may have changed since the story began), who is present, where each person is and how they're positioned (sitting, standing, across a table, beside each other, lying down), what they're wearing now, and the time of day and lighting. When details conflict, the most recent ones win. If something was never said, make a sensible choice that fits.
-2. Moment: from the most recent messages, decide what is happening right now: who is doing what, to or with whom. This is the subject of the picture, not a portrait of one person.
+2. Moment: from the most recent messages, decide what is happening right now: who is doing what, to or with whom. This is the subject of the picture, not a portrait of one person.`;
 
-Reply in exactly this format:
-Scene: one or two plain sentences: location, who is present, their positions, clothing, time of day.
-Moment: one plain sentence saying what is happening right now.
-Prompt: 30 to 70 words of comma-separated phrases, in this order:
-1. The action, with everyone taking part in it. Refer to each person by a short description of their look (4 to 8 words: age, hair, a key feature or piece of clothing), never by name, because the image model doesn't know anyone. Example: "a curly-haired woman in a grey cardigan handing a coffee to a tall bearded man in a rain jacket".
-2. Their positions relative to each other, expressions and body language.
-3. The setting, lighting and time of day, as worked out in the Scene.
-4. The framing at the end: close-up, medium shot or wide shot (wide enough to show the action).
-
-Rules:
+const IMAGE_RULES = `Rules:
+- Refer to each person by a short description of their look (age, hair, a key feature or piece of clothing), never by name, because the image model doesn't know anyone.
 - Use the Appearance notes so people look the same in every picture, adjusted for what they're wearing now.
 - Include the user's character whenever they are part of the action or in the room. If their appearance isn't given, describe them plainly from what the story says.
 - Show only what a camera would see at this exact moment. No dialogue, thoughts, sounds or backstory.`;
 
+// For models that read full sentences (Z-Image, Flux): a short paragraph, action first.
+const IMAGE_FORMAT_SENTENCES = `Reply in exactly this format:
+Scene: one or two plain sentences: location, who is present, their positions, clothing, time of day.
+Moment: one plain sentence saying what is happening right now.
+Prompt: a paragraph of 3 to 5 plain sentences (60 to 120 words) describing the photo:
+- Sentence 1 is the action, with everyone taking part in it and where they are relative to each other. Example: "A curly-haired woman in her late twenties, wearing a grey cardigan, leans across a small cafe table and hands a cup of coffee to a tall bearded man in a wet rain jacket sitting opposite her."
+- Then their expressions and body language.
+- Then the setting, the lighting and the time of day, as worked out in the Scene.
+- Last, the camera framing (close-up, medium shot or wide shot) and angle.`;
+
+// For models that read short phrases (SDXL): comma-separated phrases, action first.
+const IMAGE_FORMAT_PHRASES = `Reply in exactly this format:
+Scene: one or two plain sentences: location, who is present, their positions, clothing, time of day.
+Moment: one plain sentence saying what is happening right now.
+Prompt: 30 to 70 words of comma-separated phrases, in this order:
+1. The action, with everyone taking part in it (4 to 8 words describing each person's look). Example: "a curly-haired woman in a grey cardigan handing a coffee to a tall bearded man in a rain jacket".
+2. Their positions relative to each other, expressions and body language.
+3. The setting, lighting and time of day, as worked out in the Scene.
+4. The framing at the end: close-up, medium shot or wide shot (wide enough to show the action).`;
+
+export function imageInstructions(type) {
+  return [IMAGE_STEPS, type === 'sdxl' ? IMAGE_FORMAT_PHRASES : IMAGE_FORMAT_SENTENCES, IMAGE_RULES].join('\n\n');
+}
+
 // Story context for a picture: people, situation, the last picture's scene notes (if any),
 // up to about 10,000 characters of earlier story, then the most recent messages, clearly marked.
-export function buildImagePrompt(chat, settings, history, { focus = '', lastPicture = null } = {}) {
+export function buildImagePrompt(chat, settings, history, { focus = '', lastPicture = null, type = 'zimage' } = {}) {
   const cast = castOf(chat);
   const lines = [];
   lines.push('People in the story:');
@@ -286,14 +303,14 @@ export function buildImagePrompt(chat, settings, history, { focus = '', lastPict
   lines.push('', 'MOST RECENT MESSAGES (the moment to picture; these take priority):', ...recent.map(line));
   lines.push('', `Write the Scene, the Moment and the Prompt.${focus ? ' Focus on: ' + focus : ''}`);
   return [
-    { role: 'system', content: IMAGE_PROMPT_INSTRUCTIONS },
+    { role: 'system', content: imageInstructions(type) },
     { role: 'user', content: lines.join('\n') },
   ];
 }
 
 // Reads "Scene: …", "Moment: …" and "Prompt: …" from what the model wrote.
 // Returns { scene, moment, prompt } with the prompt tidied into a single line.
-export function parseImagePrompt(text) {
+export function parseImagePrompt(text, type = 'zimage') {
   const t = (text || '').replace(/\*\*/g, '');
   const pm = t.match(/(?:^|\n)\s*(?:image\s+)?prompt\s*:\s*([\s\S]*)$/i);
   const mm = t.match(/(?:^|\n)\s*moment\s*:\s*(.*)/i);
@@ -305,19 +322,19 @@ export function parseImagePrompt(text) {
     .replace(/^["“'`]+|["”'`]+$/g, '')
     .replace(/\*/g, '')
     .replace(/^\s*\d+\.\s*/gm, '')
-    .replace(/\s*\n+\s*/g, ', ')
+    .replace(/\s*\n+\s*/g, type === 'sdxl' ? ', ' : ' ')
     .replace(/,\s*,/g, ',')
     .replace(/^[,\s]+|[,\s]+$/g, '')
     .trim()
     .slice(0, 1000);
   return { scene, moment, prompt };
 }
-export const cleanImagePrompt = (text) => parseImagePrompt(text).prompt;
 
-// What's sent to the image model: the action (first phrase) gets a little extra weight,
-// then the rest of the description, then the photo style from Settings.
-export function finalImagePrompt(prompt, style) {
+// What's sent to the image model: the description, then the photo style from Settings.
+// SDXL only: the action (first phrase) gets a little extra weight.
+export function finalImagePrompt(prompt, style, type = 'zimage') {
   let p = (prompt || '').trim();
+  if (type !== 'sdxl') return [p && !/[.!?]$/.test(p) ? p + '.' : p, (style || '').trim()].filter(Boolean).join(' ');
   if (p && !/[()]/.test(p)) {
     const cut = p.indexOf(',');
     p = cut > 0 ? `(${p.slice(0, cut).trim()}:1.2)${p.slice(cut)}` : `(${p}:1.2)`;

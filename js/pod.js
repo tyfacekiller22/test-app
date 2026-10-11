@@ -34,6 +34,8 @@ export const startPod = (s) =>
     password: s.password,
     contextSize: Number(s.contextSize) || 32768,
     imageModelUrl: (s.imageModelUrl || '').trim(),
+    imageTextEncoderUrl: (s.imageModelUrl || '').trim() ? (s.imageTextEncoderUrl || '').trim() : '',
+    imageVaeUrl: (s.imageModelUrl || '').trim() ? (s.imageVaeUrl || '').trim() : '',
   });
 
 // Resets the pod's idle timer by asking for a 1-token reply (costs nothing extra).

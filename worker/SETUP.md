@@ -59,8 +59,9 @@ Tap **Test Worker**. It should say "Connected to your Worker. Pod: off."
 
 ## Pictures
 If the app has an image model link (Settings → Pictures), the Worker starts the pod with that model loaded
-next to the chat model (KoboldCpp's `--sdmodel`). It adds about 7GB to download (1–2 more minutes of
-"Waking up") and a slightly bigger disk. Changing the link takes effect the next time you start the pod.
+next to the chat model (KoboldCpp's `--sdmodel`, plus `--sdllm` and `--sdvae` for models like Z-Image
+that need a text encoder and VAE). It adds about 7–9GB to download (1–2 more minutes of "Waking up") and a
+slightly bigger disk. Changing the image model takes effect the next time you start the pod.
 
 ## Updating the Worker
 When `worker/worker.js` changes: Worker → **Edit code** → select all, paste the new

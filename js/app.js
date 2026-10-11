@@ -2,7 +2,7 @@
 // Screens: chat list → chat → settings. Data lives only on this device (IndexedDB).
 
 import * as store from './store.js';
-import { DEFAULT_SETTINGS, EXAMPLE_CHAT, SETTINGS_VERSION, CREATOR_FORMAT_V3, CREATOR_FORMAT_V4 } from './defaults.js';
+import { DEFAULT_SETTINGS, EXAMPLE_CHAT, SETTINGS_VERSION, CREATOR_FORMAT_V3, CREATOR_FORMAT_V4, IMAGE_PRESETS, presetFields } from './defaults.js';
 import { streamChat, abortGeneration, testConnection, ApiError, txt2img } from './api.js';
 import { getImage, cachedImage, putImage, persistImages, cleanupImages, imageIdsOf, toJpeg, shareImage } from './images.js';
 import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs, trimIncomplete, castOf, isGroup, castNames, speakerOf, splitSpeaker, buildImagePrompt, parseImagePrompt, finalImagePrompt } from './prompt.js';
@@ -15,7 +15,7 @@ import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 12; // bump with CACHE in sw.js on each update
+const APP_VERSION = 13; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -52,6 +52,15 @@ async function loadAll() {
   // v4: add the Appearance field to the Creator's draft format (keeps any other edits you made).
   if (oldVersion < 4 && (settings.creatorInstructions || '').includes(CREATOR_FORMAT_V3)) {
     settings.creatorInstructions = settings.creatorInstructions.replace(CREATOR_FORMAT_V3, CREATOR_FORMAT_V4);
+  }
+  // v5: pictures switch from RealVisXL to Z-Image Turbo (better at whole scenes). Only settings
+  // still at the old RealVisXL defaults are changed; anything you edited stays.
+  if (oldVersion < 5 && saved && !saved.imagePreset && saved.imageModelUrl === IMAGE_PRESETS.realvis.imageModelUrl) {
+    const oldDefaults = presetFields('realvis');
+    for (const [k, v] of Object.entries(presetFields('zimage'))) {
+      if (!(k in saved) || saved[k] === oldDefaults[k]) settings[k] = v;
+    }
+    settings.imagePreset = 'zimage';
   }
   if (oldVersion < SETTINGS_VERSION) {
     settings.settingsVersion = SETTINGS_VERSION;
@@ -1099,7 +1108,7 @@ async function loadPicture(id) {
 // Draws one picture from a description and adds it to the message as a new version.
 async function drawPicture(chat, m, signal) {
   const b64 = await txt2img(apiSettings(), {
-    prompt: finalImagePrompt(m.prompt, settings.imageStyle),
+    prompt: finalImagePrompt(m.prompt, settings.imageStyle, settings.imageModelType),
     negative_prompt: settings.imageNegative || '',
     width: Number(settings.imageWidth) || 832,
     height: Number(settings.imageHeight) || 1216,
@@ -1138,10 +1147,10 @@ async function makePicture(index) {
     // 1) The chat model describes the moment (assistant mode: steadier settings, short).
     const s = apiSettings();
     const { text } = await streamChat({ ...s, temperature: Math.min(Number(s.temperature) || 0.7, 0.7), xtcProbability: 0, dryMultiplier: 0, maxReplyTokens: 450 },
-      buildImagePrompt(chat, settings, history, { lastPicture: [...chat.messages.slice(0, at + 1)].reverse().find((x) => x.role === 'image' && (x.scene || x.moment)) }),
+      buildImagePrompt(chat, settings, history, { type: settings.imageModelType, lastPicture: [...chat.messages.slice(0, at + 1)].reverse().find((x) => x.role === 'image' && (x.scene || x.moment)) }),
       { signal: controller.signal });
     if (controller.signal.aborted) throw new ApiError('Stopped.', 'aborted');
-    const parsed = parseImagePrompt(text);
+    const parsed = parseImagePrompt(text, settings.imageModelType);
     m.prompt = parsed.prompt;
     m.moment = parsed.moment;
     m.scene = parsed.scene;
@@ -1463,9 +1472,24 @@ function renderSettings() {
     </div>
     <div class="group">
       <h2>Pictures</h2>
+      <div class="field"><label for="s-imagePreset">Image model</label>
+        <select id="s-imagePreset">
+          ${Object.entries(IMAGE_PRESETS).map(([k, p]) => `<option value="${k}"${settings.imagePreset === k ? ' selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+          <option value="custom"${!IMAGE_PRESETS[settings.imagePreset] ? ' selected' : ''}>Custom (links below)</option>
+        </select>
+        <p class="hint">Choosing one fills in everything below. Z-Image follows whole-scene descriptions much better; RealVisXL is better at single portraits. Changes take effect the next time you start the pod.</p></div>
       <div class="field"><label for="s-imageModelUrl">Image model link</label>
         <input id="s-imageModelUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Empty = pictures off" value="${v('imageModelUrl')}">
-        <p class="hint">An SDXL .safetensors link, loaded on the pod next to the chat model (adds about 7GB and 1–2 minutes to start-up). Takes effect the next time you start the pod. Empty = pictures off.</p></div>
+        <p class="hint">Loaded on the pod next to the chat model (adds about 7–9GB and 1–2 minutes to start-up). Empty = pictures off.</p></div>
+      <div class="field"><label for="s-imageTextEncoderUrl">Text encoder link (Z-Image, Flux)</label>
+        <input id="s-imageTextEncoderUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Not needed for SDXL" value="${v('imageTextEncoderUrl')}"></div>
+      <div class="field"><label for="s-imageVaeUrl">VAE link (Z-Image, Flux)</label>
+        <input id="s-imageVaeUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Not needed for SDXL" value="${v('imageVaeUrl')}"></div>
+      <div class="field"><label for="s-imageModelType">How descriptions are written</label>
+        <select id="s-imageModelType">
+          <option value="zimage"${settings.imageModelType !== 'sdxl' ? ' selected' : ''}>Full sentences (Z-Image, Flux)</option>
+          <option value="sdxl"${settings.imageModelType === 'sdxl' ? ' selected' : ''}>Short phrases (SDXL)</option>
+        </select></div>
       <div class="field"><label for="s-imageStyle">Photo style (added to every picture)</label>
         <textarea id="s-imageStyle" rows="2">${v('imageStyle')}</textarea></div>
       <div class="field"><label for="s-imageNegative">Avoid in pictures</label>
@@ -1478,7 +1502,7 @@ function renderSettings() {
       </div>
       <div class="field"><label for="s-imageSampler">Sampler</label>
         <input id="s-imageSampler" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${v('imageSampler')}"></div>
-      <p class="hint">Portrait 832 × 1216 and landscape 1216 × 832 suit SDXL best.</p>
+      <p class="hint">Portrait 832 × 1216 or landscape 1216 × 832. Z-Image Turbo: 8 steps, CFG 1 (it ignores "Avoid"). RealVisXL: 30 steps, CFG 5.</p>
     </div>
     <div class="group">
       <h2>Banned phrases</h2>
@@ -1511,9 +1535,21 @@ function renderSettings() {
     </div>
     <p class="hint" style="text-align:center;margin:24px 0">App version ${APP_VERSION}</p>`;
 
+  $('#s-imagePreset').onchange = (e) => {
+    const name = e.target.value;
+    if (IMAGE_PRESETS[name]) Object.assign(settings, presetFields(name));
+    settings.imagePreset = name;
+    saveSettings();
+    renderSettings();
+    toast(IMAGE_PRESETS[name] ? 'Picture settings updated. Restart the pod to load the new model.' : 'Set your own links below.');
+  };
   $('#settings-form').oninput = (e) => {
     const id = e.target.id;
-    if (!id?.startsWith('s-')) return;
+    if (!id?.startsWith('s-') || id === 's-imagePreset') return;
+    if (/^s-image(ModelUrl|TextEncoderUrl|VaeUrl)$/.test(id) && settings.imagePreset !== 'custom') {
+      settings.imagePreset = 'custom';
+      $('#s-imagePreset').value = 'custom';
+    }
     const key = id.slice(2);
     settings[key] = e.target.type === 'number' ? Number(e.target.value) : e.target.value;
     saveSettings();

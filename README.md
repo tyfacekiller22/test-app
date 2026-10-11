@@ -56,6 +56,12 @@ Added 2026-10-11 (pictures):
 - Backups can include pictures (off by default; about 0.3MB each).
 - Needs the updated worker/worker.js in Cloudflare (it loads the image model when the pod starts).
 
+Changed 2026-10-11 (pictures, v13):
+- Default image model is now **Z-Image Turbo** (Q6_K, with its Qwen3-4B text encoder and VAE, about 9GB):
+  it follows whole-scene descriptions (who does what, where) much better than SDXL. RealVisXL is still one tap
+  away in Settings → Pictures → Image model. The chat model writes full-sentence descriptions for Z-Image and
+  short phrases for SDXL. 8 steps, CFG 1. Needs the updated worker/worker.js (it passes --sdllm and --sdvae).
+
 Coming in later stages: character/situation libraries (2), memory summaries, pinned memories, generated
 details, tech support helper, backups and spending (4).
 

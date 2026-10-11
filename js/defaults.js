@@ -100,7 +100,45 @@ export const DEFAULT_BANNED_PHRASES = [
   'little did',
 ].join('\n');
 
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
+
+// ---------- Picture models ----------
+// type 'zimage' = understands full sentences (descriptions are written as sentences);
+// type 'sdxl' = understands short phrases (descriptions are written as comma-separated phrases).
+export const IMAGE_PRESETS = {
+  zimage: {
+    label: 'Z-Image Turbo (best at whole scenes)',
+    imageModelType: 'zimage',
+    imageModelUrl: 'https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q6_K.gguf',
+    imageTextEncoderUrl: 'https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q6_K.gguf',
+    imageVaeUrl: 'https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors',
+    imageStyle: 'A realistic candid photograph with natural lighting, shot on 35mm film, sharp focus.',
+    imageNegative: '',
+    imageWidth: 832,
+    imageHeight: 1216,
+    imageSteps: 8,
+    imageCfg: 1,
+    imageSampler: 'euler',
+  },
+  realvis: {
+    label: 'RealVisXL V5 (SDXL: single people, portraits)',
+    imageModelType: 'sdxl',
+    imageModelUrl: 'https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/main/RealVisXL_V5.0_fp16.safetensors',
+    imageTextEncoderUrl: '',
+    imageVaeUrl: '',
+    imageStyle: 'RAW photo, photorealistic, natural lighting, 35mm film, sharp focus, detailed skin texture',
+    imageNegative: 'bad hands, bad anatomy, ugly, deformed, face asymmetry, eyes asymmetry, deformed eyes, deformed mouth, extra fingers, cartoon, anime, illustration, painting, 3d render, text, watermark, blurry',
+    imageWidth: 832,
+    imageHeight: 1216,
+    imageSteps: 30,
+    imageCfg: 5,
+    imageSampler: 'DPM++ 2M Karras',
+  },
+};
+export function presetFields(name) {
+  const { label, ...fields } = IMAGE_PRESETS[name];
+  return fields;
+}
 
 // v4: the Creator's draft format gained an Appearance field (applied to saved instructions too).
 export const CREATOR_FORMAT_V3 = `[[CHARACTER]]
@@ -136,15 +174,9 @@ export const DEFAULT_SETTINGS = {
   password: '',
   workerUrl: '',         // your Cloudflare Worker address (pod control + auto-off)
   appKey: '',            // the APP_KEY you set in the Worker
-  // Pictures: an SDXL image model loaded on the pod next to the chat model (empty link = pictures off).
-  imageModelUrl: 'https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/main/RealVisXL_V5.0_fp16.safetensors',
-  imageStyle: 'RAW photo, photorealistic, natural lighting, 35mm film, sharp focus, detailed skin texture',
-  imageNegative: 'bad hands, bad anatomy, ugly, deformed, face asymmetry, eyes asymmetry, deformed eyes, deformed mouth, extra fingers, cartoon, anime, illustration, painting, 3d render, text, watermark, blurry',
-  imageWidth: 832,
-  imageHeight: 1216,
-  imageSteps: 30,
-  imageCfg: 5,
-  imageSampler: 'DPM++ 2M Karras',
+  // Pictures: an image model loaded on the pod next to the chat model (empty link = pictures off).
+  imagePreset: 'zimage',
+  ...presetFields('zimage'),
   lowBalanceWarning: 5,  // warn when the Runpod balance drops below this many dollars (0 = off)
   modelUrl: 'https://huggingface.co/bartowski/TheDrummer_Artemis-31B-v1.1-GGUF/resolve/main/TheDrummer_Artemis-31B-v1.1-Q6_K.gguf',
   maxReplyTokens: 400,   // safety net only; length is kept short by maxParagraphs + instructions
