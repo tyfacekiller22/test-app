@@ -15,7 +15,7 @@ import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 16; // bump with CACHE in sw.js on each update
+const APP_VERSION = 17; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -1357,13 +1357,14 @@ function pictureMenu(m) {
   });
 }
 
-// Full-screen gallery of every picture in the chat (each version of each picture), opening
+// Full-screen gallery of the chat's pictures (the latest version of each), opening
 // on the one you tapped. Swipe left/right to move between them, swipe down (or ✕) to close.
 function chatGallery(chat) {
   const list = [];
   for (const m of chat.messages) {
-    if (m.role !== 'image') continue;
-    (m.images || []).forEach((imgId, vi) => list.push({ m, imgId, vi }));
+    if (m.role !== 'image' || !(m.images || []).length) continue;
+    const vi = m.images.length - 1; // the most recently generated version
+    list.push({ m, imgId: m.images[vi], vi });
   }
   return list;
 }
@@ -1374,7 +1375,7 @@ async function openViewer(id) {
   if (!start || start.role !== 'image') return;
   let list = chatGallery(chat);
   if (!list.length) return;
-  let idx = Math.max(0, list.findIndex((e) => e.m === start && e.vi === (start.ii ?? 0)));
+  let idx = Math.max(0, list.findIndex((e) => e.m === start));
 
   const v = document.createElement('div');
   v.className = 'viewer';

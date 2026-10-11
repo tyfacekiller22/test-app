@@ -68,7 +68,7 @@ Added 2026-10-11 (v14):
   draws it. Chats whose character had no photo pick up the new one automatically.
 
 Added 2026-10-11 (v15):
-- Tapping a picture opens a full-screen **gallery of all the chat's pictures** (every version), starting at that one.
+- Tapping a picture opens a full-screen **gallery of all the chat's pictures** (the latest version of each), starting at that one.
   Swipe left/right to move through them, swipe down or ✕ to close. Save / New version / Edit / Delete work on the
   picture you're looking at (Delete removes just that version, with Undo).
 
