@@ -5,7 +5,7 @@ import * as store from './store.js';
 import { DEFAULT_SETTINGS, EXAMPLE_CHAT, SETTINGS_VERSION, CREATOR_FORMAT_V3, CREATOR_FORMAT_V4 } from './defaults.js';
 import { streamChat, abortGeneration, testConnection, ApiError, txt2img } from './api.js';
 import { getImage, cachedImage, putImage, persistImages, cleanupImages, imageIdsOf, toJpeg, shareImage } from './images.js';
-import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs, trimIncomplete, castOf, isGroup, castNames, speakerOf, splitSpeaker, buildImagePrompt, cleanImagePrompt } from './prompt.js';
+import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs, trimIncomplete, castOf, isGroup, castNames, speakerOf, splitSpeaker, buildImagePrompt, parseImagePrompt, finalImagePrompt } from './prompt.js';
 import { initCreator, renderCreator, scrollCreatorToBottom } from './creator.js';
 import { parseImport } from './importer.js';
 import { podControlEnabled, getStatus, startPod, stopPod, keepAlive, recordSession, monthTotal, fmtDuration } from './pod.js';
@@ -15,7 +15,7 @@ import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 10; // bump with CACHE in sw.js on each update
+const APP_VERSION = 12; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -1099,7 +1099,7 @@ async function loadPicture(id) {
 // Draws one picture from a description and adds it to the message as a new version.
 async function drawPicture(chat, m, signal) {
   const b64 = await txt2img(apiSettings(), {
-    prompt: [m.prompt, settings.imageStyle].filter((x) => (x || '').trim()).join(', '),
+    prompt: finalImagePrompt(m.prompt, settings.imageStyle),
     negative_prompt: settings.imageNegative || '',
     width: Number(settings.imageWidth) || 832,
     height: Number(settings.imageHeight) || 1216,
@@ -1137,10 +1137,14 @@ async function makePicture(index) {
   try {
     // 1) The chat model describes the moment (assistant mode: steadier settings, short).
     const s = apiSettings();
-    const { text } = await streamChat({ ...s, temperature: Math.min(Number(s.temperature) || 0.7, 0.7), xtcProbability: 0, dryMultiplier: 0, maxReplyTokens: 220 },
-      buildImagePrompt(chat, settings, history), { signal: controller.signal });
+    const { text } = await streamChat({ ...s, temperature: Math.min(Number(s.temperature) || 0.7, 0.7), xtcProbability: 0, dryMultiplier: 0, maxReplyTokens: 450 },
+      buildImagePrompt(chat, settings, history, { lastPicture: [...chat.messages.slice(0, at + 1)].reverse().find((x) => x.role === 'image' && (x.scene || x.moment)) }),
+      { signal: controller.signal });
     if (controller.signal.aborted) throw new ApiError('Stopped.', 'aborted');
-    m.prompt = cleanImagePrompt(text);
+    const parsed = parseImagePrompt(text);
+    m.prompt = parsed.prompt;
+    m.moment = parsed.moment;
+    m.scene = parsed.scene;
     if (!m.prompt) throw new Error("The model didn't describe the scene. Try again.");
     // 2) The image model draws it.
     gen.stage = 'image';
@@ -1215,9 +1219,9 @@ async function savePicture(m) {
 function editPictureSheet(m) {
   const s = openSheet({
     title: 'Picture description',
-    body: `<div class="field"><label for="pic-prompt">What the picture shows</label>
+    body: `${m.scene ? `<p class="hint" style="margin:0 0 6px"><strong>The scene:</strong> ${escapeHtml(m.scene)}</p>` : ''}${m.moment ? `<p class="hint" style="margin:0 0 12px"><strong>The moment:</strong> ${escapeHtml(m.moment)}</p>` : ''}<div class="field"><label for="pic-prompt">What the picture shows</label>
         <textarea id="pic-prompt" rows="7">${escapeHtml(m.prompt || '')}</textarea>
-        <p class="hint">Written by the model from the story. Edit it and redraw. The photo style from Settings → Pictures is added after it.</p></div>`,
+        <p class="hint">Written by the model from the story. The image model pays most attention to the start, so put the main action first. The photo style from Settings → Pictures is added after it.</p></div>`,
     actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="pic-redraw">Redraw</button>',
   });
   $('#pic-redraw', s.el).addEventListener('click', () => {
