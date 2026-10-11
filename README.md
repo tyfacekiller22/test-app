@@ -79,6 +79,11 @@ Added 2026-10-11 (v16):
 - The screen stays awake while a picture or profile photo is being made (Screen Wake Lock; iPhone home-screen apps
   support it from iOS 18.4).
 
+Added 2026-10-11 (v19):
+- Image model preset **LUSTIFY! V7** (photorealistic SDXL trained mainly on explicit images), from a Hugging Face
+  copy whose SHA256 matches the official release. Short-phrase descriptions, 30 steps, CFG 4. Like RealVisXL, it's
+  weaker than Z-Image at scenes with several people interacting.
+
 Coming in later stages: character/situation libraries (2), memory summaries, pinned memories, generated
 details, tech support helper, backups and spending (4).
 

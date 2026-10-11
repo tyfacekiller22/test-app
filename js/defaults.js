@@ -120,6 +120,22 @@ export const IMAGE_PRESETS = {
     imageCfg: 1,
     imageSampler: 'euler',
   },
+  lustify: {
+    // LUSTIFY! GGWP (V7), Aug 2025: photorealistic SDXL fine-tune trained mainly on explicit images.
+    // Hugging Face mirror; its SHA256 (d234c60d…2220f) matches the official Civitai file.
+    label: 'LUSTIFY! V7 (SDXL, explicit, photorealistic)',
+    imageModelType: 'sdxl',
+    imageModelUrl: 'https://huggingface.co/aboba2005/lustifySDXLNSFW_ggwpV7/resolve/main/lustifySDXLNSFW_ggwpV7.safetensors',
+    imageTextEncoderUrl: '',
+    imageVaeUrl: '',
+    imageStyle: 'RAW photo, photorealistic, natural lighting, 35mm film, sharp focus, detailed skin texture',
+    imageNegative: 'bad hands, bad anatomy, deformed, extra fingers, extra limbs, cartoon, anime, illustration, painting, 3d render, text, watermark, blurry',
+    imageWidth: 832,
+    imageHeight: 1216,
+    imageSteps: 30,
+    imageCfg: 4,
+    imageSampler: 'DPM++ 2M Karras',
+  },
   realvis: {
     label: 'RealVisXL V5 (SDXL: single people, portraits)',
     imageModelType: 'sdxl',
