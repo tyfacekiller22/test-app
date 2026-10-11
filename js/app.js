@@ -15,7 +15,7 @@ import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 17; // bump with CACHE in sw.js on each update
+const APP_VERSION = 18; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -718,12 +718,18 @@ $('#messages').addEventListener('click', (e) => {
   box.addEventListener('pointerup', (e) => {
     const wasTarget = target;
     cancel();
-    if (longPressed || !wasTarget || gen) return;
+    if (longPressed || !wasTarget) return;
     const dx = e.clientX - startX, dy = e.clientY - startY;
-    // A simple tap opens the message for editing.
+    // A simple tap on a picture opens it full screen (works even while something is being generated).
+    if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && wasTarget.classList.contains('image')) {
+      const m = current.messages.find((x) => x.id === wasTarget.dataset.id);
+      if (m && (m.images || []).length) openViewer(m.id);
+      return;
+    }
+    if (gen) return;
+    // A simple tap on a message opens it for editing.
     if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
-      if (wasTarget.classList.contains('image')) openViewer(wasTarget.dataset.id);
-      else startInlineEdit(wasTarget.dataset.id);
+      startInlineEdit(wasTarget.dataset.id);
       return;
     }
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
@@ -1400,8 +1406,20 @@ async function openViewer(id) {
   const stage = $('#v-stage', v);
   const close = () => { v.remove(); if (current === chat) renderMessages(); };
 
+  // While something is being generated: viewing and saving work; new versions, edits and
+  // deleting the picture being drawn wait until it's done.
+  const updateButtons = () => {
+    const e = list[idx];
+    $('[data-v="again"]', v).disabled = !!gen;
+    $('[data-v="edit"]', v).disabled = !!gen;
+    $('[data-v="delete"]', v).disabled = !!(gen && e && gen.msgId === e.m.id);
+  };
+  const tick = setInterval(updateButtons, 500);
+  new MutationObserver((_, obs) => { if (!v.isConnected) { clearInterval(tick); obs.disconnect(); } }).observe(document.body, { childList: true });
+
   async function show(dir = 0) {
     const e = list[idx];
+    updateButtons();
     $('#v-count', v).textContent = list.length > 1 ? `${idx + 1} / ${list.length}` : '';
     $('.viewer-nav.prev', v).hidden = idx === 0;
     $('.viewer-nav.next', v).hidden = idx >= list.length - 1;
@@ -1467,6 +1485,7 @@ async function openViewer(id) {
     const act = e.target.closest('[data-v]')?.dataset.v;
     if (!act) return;
     const cur = list[idx];
+    if (e.target.closest('[data-v]').disabled) return;
     if (act === 'close') return close();
     if (act === 'prev') return go(-1);
     if (act === 'next') return go(1);
