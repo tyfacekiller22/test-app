@@ -14,7 +14,7 @@ import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 8; // bump with CACHE in sw.js on each update
+const APP_VERSION = 9; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -1171,6 +1171,9 @@ function renderSettings() {
       <div class="field"><label for="s-modelUrl">Model download link</label>
         <input id="s-modelUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" value="${v('modelUrl')}">
         <p class="hint">A .gguf link. Change this to try a different model.</p></div>
+      <div class="field"><label for="s-lowBalanceWarning">Low-balance warning ($)</label>
+        <input id="s-lowBalanceWarning" type="number" inputmode="decimal" step="any" min="0" value="${v('lowBalanceWarning')}">
+        <p class="hint">Warns you when your Runpod balance drops below this, and before starting a pod. 0 = off.</p></div>
       <div class="row"><button class="btn-secondary" id="test-worker">Test Worker</button><span class="status" id="worker-status"></span></div>
     </div>
     <div class="group">
@@ -1252,7 +1255,9 @@ function renderSettings() {
     try {
       const r = await getStatus(settings);
       st.className = 'status ok';
-      st.textContent = 'Connected to your Worker. Pod: ' + (r.pod ? r.pod.status.toLowerCase() : 'off') + '.';
+      st.textContent = 'Connected to your Worker. Pod: ' + (r.pod ? r.pod.status.toLowerCase() : 'off') + '. ' +
+        (r.account ? `Balance: $${r.account.balance.toFixed(2)}.` : "Balance: couldn't read it (update the Worker?).");
+      applyAccount(r.account);
       applyPodStatus(r.pod);
     } catch (e) {
       st.className = 'status bad';
@@ -1379,6 +1384,38 @@ let podBusy = false;        // a start/stop request is in flight
 let podError = '';
 let pollTimer = null;
 let spend = {};
+let account = null;         // { balance, spendPerHr, at } from the Worker (null = unknown)
+let lowWarnedAt = null;     // balance we last warned about (warn once per drop)
+
+// Runpod balance (from the Worker's status). Kept on the phone so it shows right away next time.
+function applyAccount(a) {
+  if (!a || typeof a.balance !== 'number') return;
+  account = { balance: a.balance, spendPerHr: a.spendPerHr || 0, at: Date.now() };
+  store.set('account', account).catch(() => {});
+  const limit = Number(settings.lowBalanceWarning) || 0;
+  if (limit > 0 && account.balance < limit) {
+    if (lowWarnedAt === null) {
+      lowWarnedAt = account.balance;
+      toast(`Low Runpod balance: $${account.balance.toFixed(2)} left (${hoursLeftText()}). Add credit in Runpod.`, 7000);
+    }
+  } else {
+    lowWarnedAt = null;
+  }
+}
+
+// The GPU price to estimate with: the running pod's, else the last one seen, else an A40.
+function hourlyRate() {
+  return podState?.costPerHour || account?.spendPerHr || Number(spend.lastRate) || 0.59;
+}
+function hoursLeftText() {
+  if (!account) return '';
+  const h = account.balance / hourlyRate();
+  return h < 1 ? `about ${Math.max(0, Math.round(h * 60))} min of chat` : `about ${h < 10 ? h.toFixed(1).replace(/\.0$/, '') : Math.round(h)} h of chat`;
+}
+const isLowBalance = () => {
+  const limit = Number(settings.lowBalanceWarning) || 0;
+  return !!account && limit > 0 && account.balance < limit;
+};
 
 // Settings for talking to KoboldCpp: with pod control, the pod address comes from the Worker.
 function apiSettings() {
@@ -1398,6 +1435,7 @@ function applyPodStatus(pod) {
   podError = '';
   if (pod) {
     spend = recordSession(spend, pod);
+    if (pod.costPerHour) spend.lastRate = pod.costPerHour;
     store.set('spend', spend).catch(() => {});
   }
   if (pod?.ready && !wasReady && podStatusAt - appStartedAt > 3000) toast('Your pod is ready.');
@@ -1407,7 +1445,9 @@ function applyPodStatus(pod) {
 async function refreshPod() {
   if (!podControlEnabled(settings) || document.hidden) return;
   try {
-    applyPodStatus((await getStatus(settings)).pod);
+    const r = await getStatus(settings);
+    applyAccount(r.account);
+    applyPodStatus(r.pod);
   } catch (e) {
     podError = e.message;
     renderPod();
@@ -1427,7 +1467,15 @@ function renderPod() {
   const btn = $('#pod-btn');
   const dot = $('#pod-dot');
   const total = monthTotal(spend);
-  $('#pod-meta').textContent = enabled ? `This month: about $${total.toFixed(2)}` : '';
+  const meta = $('#pod-meta');
+  if (!enabled) meta.textContent = '';
+  else {
+    const low = isLowBalance();
+    meta.classList.toggle('low', low);
+    meta.innerHTML = (account
+      ? `<span class="pod-balance">${low ? 'Low balance: ' : 'Balance: '}$${account.balance.toFixed(2)} · ${hoursLeftText()}</span>`
+      : '') + `<span>This month: about $${total.toFixed(2)}</span>`;
+  }
 
   if (!enabled) {
     dot.className = 'pod-dot';
@@ -1473,6 +1521,7 @@ function renderChatBanner() {
 async function podStart() {
   if (podBusy) return;
   if (!settings.password) { toast('Set a pod password in Settings first.'); location.hash = '#/settings'; return; }
+  if (isLowBalance() && !confirm(`Your Runpod balance is $${account.balance.toFixed(2)} (${hoursLeftText()}). The pod stops when it runs out. Start anyway?`)) return;
   podBusy = true; renderPod();
   $('#pod-title').textContent = 'Starting…';
   $('#pod-sub').textContent = 'Asking Runpod for a GPU.';
@@ -1561,6 +1610,7 @@ window.addEventListener('resize', fitToViewport);
   }
   store.requestPersistence();
   spend = (await store.get('spend').catch(() => null)) || {};
+  account = (await store.get('account').catch(() => null)) || null;
   route();
   renderPod();
   await refreshPod();

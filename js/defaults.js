@@ -104,6 +104,7 @@ export const DEFAULT_SETTINGS = {
   password: '',
   workerUrl: '',         // your Cloudflare Worker address (pod control + auto-off)
   appKey: '',            // the APP_KEY you set in the Worker
+  lowBalanceWarning: 5,  // warn when the Runpod balance drops below this many dollars (0 = off)
   modelUrl: 'https://huggingface.co/bartowski/TheDrummer_Artemis-31B-v1.1-GGUF/resolve/main/TheDrummer_Artemis-31B-v1.1-Q6_K.gguf',
   maxReplyTokens: 400,   // safety net only; length is kept short by maxParagraphs + instructions
   maxParagraphs: 2,      // replies are cut off after this many paragraphs (0 = no limit)

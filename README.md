@@ -39,6 +39,11 @@ Added 2026-10-10:
   something saved, you can update it or save it as new. "Rework something saved…" shares a library item with it.
   Its instructions are editable in Settings → Creator instructions. Uses the same pod (pod must be on).
 
+Added 2026-10-11:
+- **Runpod balance** on the Chats screen, with roughly how many hours of chat it covers. A warning appears when it
+  drops below the amount in Settings → Pod control → Low-balance warning (default $5, 0 = off), and Start asks
+  first if the balance is low. Needs the updated worker/worker.js pasted into Cloudflare (see worker/SETUP.md).
+
 Coming in later stages: character/situation libraries (2), memory summaries, pinned memories, generated
 details, tech support helper, backups and spending (4).
 

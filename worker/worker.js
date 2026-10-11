@@ -15,8 +15,11 @@
 //   MAX_HOURS       (text, optional, default 3)
 //   LOAD_TIMEOUT_MINUTES (text, optional, default 30): give up if the model hasn't loaded by then
 // Trigger (Settings → Triggers → Cron Triggers): * * * * *   (every minute)
+//
+// /status also returns your Runpod credit balance (shown on the app's Chats screen).
 
 const API = 'https://api.runpod.io/v2';
+const GRAPHQL = 'https://api.runpod.io/graphql';
 const POD_NAME = 'companion-chat';
 const IMAGE = 'ghcr.io/lostruins/koboldcpp';
 // Tried in order until one is available. All have 48GB, enough for a 31B model at Q6/Q8.
@@ -117,11 +120,38 @@ async function terminate(env, id) {
   if (!r.ok && r.status !== 404 && r.status !== 409) throw new Error(`Runpod: couldn't stop the pod (${r.status})`);
 }
 
+// Your Runpod credit balance. Uses Runpod's GraphQL API (the same account details
+// `runpodctl user` shows), since the REST API has no balance endpoint.
+// Returns null if it can't be read, so the app just hides the balance.
+async function account(env) {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(GRAPHQL, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + env.RUNPOD_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: '{ myself { clientBalance currentSpendPerHr spendLimit } }' }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const me = (await res.json())?.data?.myself;
+    if (!me || typeof me.clientBalance !== 'number') return null;
+    return {
+      balance: me.clientBalance,
+      spendPerHr: Number(me.currentSpendPerHr) || 0,
+      spendLimit: me.spendLimit ?? null,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 // ---------- Actions ----------
 async function status(env) {
-  const pods = await ourPods(env);
-  if (!pods.length) return { pod: null };
-  return { pod: await describe(env, pods[0]), extra: pods.length - 1 };
+  const [pods, acct] = await Promise.all([ourPods(env), account(env)]);
+  if (!pods.length) return { pod: null, account: acct };
+  return { pod: await describe(env, pods[0]), extra: pods.length - 1, account: acct };
 }
 
 async function start(env, body) {

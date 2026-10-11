@@ -54,6 +54,12 @@ Tap **Test Worker**. It should say "Connected to your Worker. Pod: off."
 - **Stop** shuts the pod down right away (the pod is deleted, so billing stops completely).
 - In a chat, a banner appears 2 minutes before auto-off. Tap **Keep on** to reset the timer.
 - "This month" on the main screen is an estimate kept on your phone. Runpod's billing page is exact.
+- The main screen also shows your **Runpod balance** and roughly how many hours of chat it covers.
+  Set the low-balance warning in the app's Settings → Pod control (0 turns it off).
+
+## Updating the Worker
+When `worker/worker.js` changes: Worker → **Edit code** → select all, paste the new
+`worker/worker.js` → **Deploy**. Your settings, secrets and cron trigger stay as they are.
 
 ## If something goes wrong
 - **"Wrong app key"**: the app key in the app doesn't match `APP_KEY` in the Worker.
@@ -62,3 +68,6 @@ Tap **Test Worker**. It should say "Connected to your Worker. Pod: off."
 - **Stuck on "Waking up" for over 15 minutes**: open the pod in Runpod and check its **Logs**.
   The auto-off removes a pod whose model never loads after 30 minutes.
 - To see what the auto-off did: Worker → **Logs** (look for "Auto-off: terminated").
+- **No balance on the main screen**: the Worker couldn't read it from Runpod. Everything else still works.
+  Check the Worker was updated (see above). Runpod's balance comes from its older GraphQL API, which
+  Runpod could change. Your balance is always on Runpod's own dashboard.
