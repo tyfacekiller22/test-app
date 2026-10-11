@@ -134,3 +134,27 @@ export async function testConnection(settings) {
     return { ok: false, message: "Can't reach the pod. Check it's running and the address is right." };
   }
 }
+
+// ---------- Pictures ----------
+// KoboldCpp's A1111-compatible image endpoint (works when the pod was started with an image model).
+// Returns the image as base64 PNG.
+export async function txt2img(settings, params, { signal } = {}) {
+  let res;
+  try {
+    res = await fetch(baseUrl(settings) + '/sdapi/v1/txt2img', {
+      method: 'POST',
+      headers: headers(settings),
+      body: JSON.stringify(params),
+      signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new ApiError('Stopped.', 'aborted');
+    throw new ApiError("Can't reach the pod to make the picture.", 'network');
+  }
+  if (res.status === 401) throw new ApiError('The pod rejected the password. Check it in Settings.', 'auth');
+  if (!res.ok) throw new ApiError(`The pod couldn't make a picture (${res.status}). Was it started with an image model?`, 'server');
+  const data = await res.json().catch(() => ({}));
+  const img = data.images?.[0];
+  if (!img) throw new ApiError("The pod didn't return a picture. Is an image model loaded? (Settings → Pictures)", 'server');
+  return String(img).replace(/^data:image\/\w+;base64,/, '');
+}

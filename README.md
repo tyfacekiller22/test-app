@@ -44,6 +44,18 @@ Added 2026-10-11:
   drops below the amount in Settings → Pod control → Low-balance warning (default $5, 0 = off), and Start asks
   first if the balance is low. Needs the updated worker/worker.js pasted into Cloudflare (see worker/SETUP.md).
 
+Added 2026-10-11 (pictures):
+- **Picture button** (image icon in the action row): the chat model describes the current moment, then the
+  image model on the pod draws it (photorealistic, RealVisXL V5.0 by default). Long-press any message →
+  "Picture this moment" pictures an earlier point. Tap a picture to view it full screen: Save (to Photos),
+  New version, Edit (change the description and redraw), Delete. Pictures are never sent to the chat model.
+- **Appearance** field for AI characters and your characters (library, New chat, chat settings, Creator drafts).
+  Used in pictures and in the chat prompt; concrete details keep people looking more alike between pictures.
+- Regenerate is now an icon (it switches to a Reply icon when the last message isn't a reply).
+- Settings → Pictures: image model link (empty = pictures off), photo style, things to avoid, size, steps, CFG, sampler.
+- Backups can include pictures (off by default; about 0.3MB each).
+- Needs the updated worker/worker.js in Cloudflare (it loads the image model when the pod starts).
+
 Coming in later stages: character/situation libraries (2), memory summaries, pinned memories, generated
 details, tech support helper, backups and spending (4).
 
@@ -54,6 +66,7 @@ css/app.css           all the styling (light + dark mode)
 js/app.js             screens, buttons, chat logic
 js/prompt.js          builds exactly what the model is told (including group scenes)
 js/creator.js         the Creator screen (build characters and situations with AI)
+js/images.js          stores pictures on the phone, saving to Photos
 js/api.js             talks to KoboldCpp on the pod
 js/defaults.js        default instructions, banned phrases, sampler values, example character
 js/store.js           saves data on the device

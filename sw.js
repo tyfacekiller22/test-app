@@ -2,7 +2,7 @@
 // It only stores the app's own files. Requests to your pod are never cached.
 // Network-first: when online you always get the latest version of the app.
 
-const CACHE = 'companion-v11';
+const CACHE = 'companion-v12';
 const SHELL = [
   './',
   'index.html',
@@ -13,6 +13,7 @@ const SHELL = [
   'js/creator.js',
   'js/defaults.js',
   'js/format.js',
+  'js/images.js',
   'js/importer.js',
   'js/library.js',
   'js/pod.js',

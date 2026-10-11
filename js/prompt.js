@@ -9,7 +9,7 @@
 // The first character lives in the chat's own fields (charName, charDescription, charPhoto).
 // Extra characters for group scenes live in chat.extraChars: [{ key, charId, name, description, photo }].
 export function castOf(chat) {
-  const main = { key: 'main', name: chat.charName || 'Character', description: chat.charDescription || '', photo: chat.charPhoto || '', charId: chat.charId || '' };
+  const main = { key: 'main', name: chat.charName || 'Character', description: chat.charDescription || '', appearance: chat.charAppearance || '', photo: chat.charPhoto || '', charId: chat.charId || '' };
   const extras = (chat.extraChars || []).filter((c) => c && (c.name || '').trim());
   return [main, ...extras];
 }
@@ -59,11 +59,14 @@ export function systemPrompt(chat, settings) {
   if (chat.useGlobal !== false && settings.globalInstructions?.trim()) {
     parts.push(fill(settings.globalInstructions.trim(), chat));
   }
+  const withLook = (text, look) => [text, look ? `Appearance: ${look}` : ''].filter(Boolean).join('\n');
   for (const c of cast) {
-    if (c.description.trim()) parts.push(`About ${c.name}\n${fill(c.description.trim(), chat, c.name)}`);
+    const look = (c.appearance || '').trim();
+    if (c.description.trim() || look) parts.push(`About ${c.name}\n${withLook(fill(c.description.trim(), chat, c.name), fill(look, chat, c.name))}`);
   }
-  if (chat.userDescription?.trim()) {
-    parts.push(`About ${chat.userName} (played by the user)\n${fill(chat.userDescription.trim(), chat)}`);
+  const userLook = (chat.userAppearance || '').trim();
+  if (chat.userDescription?.trim() || userLook) {
+    parts.push(`About ${chat.userName} (played by the user)\n${withLook(fill((chat.userDescription || '').trim(), chat), fill(userLook, chat))}`);
   }
   if (group) {
     const names = cast.map((c) => c.name);
@@ -221,4 +224,61 @@ export function tidy(text, chat, mode) {
   t = t.replace(re, '');
   if (mode === 'narrate') t = t.replace(/^\[|\]$/g, '').trim();
   return t;
+}
+
+// ---------- Pictures ----------
+// The chat model (in assistant mode) turns the current moment into a description an
+// image model can draw. Image models don't know who anyone is, so names are replaced
+// by what people look like.
+export const IMAGE_PROMPT_INSTRUCTIONS = `You turn a moment from a story into a prompt for a photorealistic image model. You are not continuing the story.
+
+Write one paragraph of comma-separated descriptive phrases, 40 to 80 words:
+- Start with the framing (close-up, medium shot or wide shot) and who is in the frame.
+- Describe each visible person by how they look, never by name: the image model doesn't know who anyone is. Use their Appearance notes closely so they look the same in every picture. Add their expression, pose and what they're doing right now.
+- Then clothing, the setting, lighting and time of day.
+- Only what a camera would see at this exact moment. No dialogue, thoughts, sounds, backstory or story events that already ended.
+- Include the user's character only if they'd naturally be in view. If their appearance isn't given, frame the shot from their point of view instead.
+Output only the prompt, with no label or quotes.`;
+
+export function buildImagePrompt(chat, settings, history, { focus = '' } = {}) {
+  const cast = castOf(chat);
+  const lines = [];
+  lines.push('People in the story:');
+  for (const c of cast) {
+    const about = fill((c.description || '').trim(), chat, c.name).replace(/\s+/g, ' ').slice(0, 300);
+    lines.push(`- ${c.name}. Appearance: ${(c.appearance || '').trim() || 'not given (infer from the description)'}. About: ${about || 'unknown'}`);
+  }
+  const userAbout = fill((chat.userDescription || '').trim(), chat).replace(/\s+/g, ' ').slice(0, 200);
+  lines.push(`- ${chat.userName || 'User'} (the user's character). Appearance: ${(chat.userAppearance || '').trim() || 'not given'}.${userAbout ? ' About: ' + userAbout : ''}`);
+  if (chat.situation?.trim()) lines.push('', 'Situation: ' + fill(chat.situation.trim(), chat));
+
+  // The last part of the story, newest last (about 6,000 characters).
+  const recent = [];
+  let size = 0;
+  for (let i = history.length - 1; i >= 0 && size < 6000; i--) {
+    const m = history[i];
+    const t = textOf(m).trim();
+    if (!t || m.role === 'image') continue;
+    const who = m.role === 'user' ? chat.userName || 'User' : m.role === 'narrator' ? 'Narrator' : speakerOf(chat, m).name;
+    recent.unshift(`${who}: ${t}`);
+    size += t.length;
+  }
+  lines.push('', 'The story so far (latest last):', ...recent);
+  lines.push('', `Write the image prompt for the moment at the very end of the story.${focus ? ' Focus on: ' + focus : ''}`);
+  return [
+    { role: 'system', content: IMAGE_PROMPT_INSTRUCTIONS },
+    { role: 'user', content: lines.join('\n') },
+  ];
+}
+
+// Tidies what the model wrote into a single-line prompt.
+export function cleanImagePrompt(text) {
+  return (text || '')
+    .replace(/^\s*(image )?prompt\s*:\s*/i, '')
+    .replace(/^["“'`]+|["”'`]+$/g, '')
+    .replace(/\*/g, '')
+    .replace(/\s*\n+\s*/g, ', ')
+    .replace(/,\s*,/g, ',')
+    .trim()
+    .slice(0, 1000);
 }

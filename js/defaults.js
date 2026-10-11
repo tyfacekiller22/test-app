@@ -58,12 +58,16 @@ When you have enough, write the draft in exactly this format. The app turns it i
 Name: the character's name
 Description:
 the full description
+Appearance:
+how they look: age, build, hair, face, usual clothes (one or two lines, concrete)
 [[END]]
 
 [[YOU]]
 Name: the user's character's name
 Description:
 who they are in the story
+Appearance:
+how they look (leave empty if the user doesn't say)
 [[END]]
 
 [[SITUATION]]
@@ -96,7 +100,35 @@ export const DEFAULT_BANNED_PHRASES = [
   'little did',
 ].join('\n');
 
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
+
+// v4: the Creator's draft format gained an Appearance field (applied to saved instructions too).
+export const CREATOR_FORMAT_V3 = `[[CHARACTER]]
+Name: the character's name
+Description:
+the full description
+[[END]]
+
+[[YOU]]
+Name: the user's character's name
+Description:
+who they are in the story
+[[END]]`;
+export const CREATOR_FORMAT_V4 = `[[CHARACTER]]
+Name: the character's name
+Description:
+the full description
+Appearance:
+how they look: age, build, hair, face, usual clothes (one or two lines, concrete)
+[[END]]
+
+[[YOU]]
+Name: the user's character's name
+Description:
+who they are in the story
+Appearance:
+how they look (leave empty if the user doesn't say)
+[[END]]`;
 
 export const DEFAULT_SETTINGS = {
   settingsVersion: SETTINGS_VERSION,
@@ -104,6 +136,15 @@ export const DEFAULT_SETTINGS = {
   password: '',
   workerUrl: '',         // your Cloudflare Worker address (pod control + auto-off)
   appKey: '',            // the APP_KEY you set in the Worker
+  // Pictures: an SDXL image model loaded on the pod next to the chat model (empty link = pictures off).
+  imageModelUrl: 'https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/main/RealVisXL_V5.0_fp16.safetensors',
+  imageStyle: 'RAW photo, photorealistic, natural lighting, 35mm film, sharp focus, detailed skin texture',
+  imageNegative: 'bad hands, bad anatomy, ugly, deformed, face asymmetry, eyes asymmetry, deformed eyes, deformed mouth, extra fingers, cartoon, anime, illustration, painting, 3d render, text, watermark, blurry',
+  imageWidth: 832,
+  imageHeight: 1216,
+  imageSteps: 30,
+  imageCfg: 5,
+  imageSampler: 'DPM++ 2M Karras',
   lowBalanceWarning: 5,  // warn when the Runpod balance drops below this many dollars (0 = off)
   modelUrl: 'https://huggingface.co/bartowski/TheDrummer_Artemis-31B-v1.1-GGUF/resolve/main/TheDrummer_Artemis-31B-v1.1-Q6_K.gguf',
   maxReplyTokens: 400,   // safety net only; length is kept short by maxParagraphs + instructions
@@ -130,8 +171,10 @@ export const EXAMPLE_CHAT = {
   charName: 'Mara',
   charDescription:
     "Mara, 29, freelance illustrator. Dry, observant, quietly funny. Deflects with jokes when something matters. Loyal but slow to admit it. Short sentences, understatement, the occasional pointed question; rarely uses exclamation points. Moved back to town a year ago after a falling-out with her older sister, who she hasn't spoken to since. Doesn't bring it up.\n\nExample of her style:\n*Mara doesn't look up from the crossword.* You're late.\n*She slides the paper across the table.* Fourteen across. Seven letters. \"Something kept close to the chest.\" Go.",
+  charAppearance: 'Late 20s, dark curly hair usually pinned up with a pencil, ink-stained fingers, oversized grey cardigan.',
   userName: 'Sam',
   userDescription: "Mara's old school friend. The two of them have recently started meeting for coffee again.",
+  userAppearance: '',
   situation:
     'A rainy Saturday afternoon at a small café. Mara has claimed the corner table with a half-finished crossword. {{user}} has just arrived, late.',
   openingMessage: "*Mara doesn't look up from the crossword.* You're late. I was about to fill in 14-across without you.",

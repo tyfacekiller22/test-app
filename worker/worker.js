@@ -164,6 +164,8 @@ async function start(env, body) {
     '--contextsize', String(body.contextSize || 32768),
     '--flashattention', '--quiet',
     '--password', body.password,
+    // Pictures: also load an image model (SDXL) next to the chat model.
+    ...(/^https:\/\/\S+$/.test(body.imageModelUrl || '') ? ['--sdmodel', body.imageModelUrl] : []),
   ].join(' ');
   const gpus = Array.isArray(body.gpus) && body.gpus.length ? body.gpus : DEFAULT_GPUS;
   const tried = [];
@@ -173,7 +175,7 @@ async function start(env, body) {
       image: IMAGE,
       gpu: { id: gpu, count: 1 },
       cloud: 'SECURE',
-      disk: Number(body.diskGb || 50),
+      disk: Number(body.diskGb || (body.imageModelUrl ? 60 : 50)),
       ports: ['5001/http'],
       env: { KCPP_MODEL: body.modelUrl, KCPP_ARGS: args },
     });

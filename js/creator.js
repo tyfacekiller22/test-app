@@ -21,8 +21,8 @@ const BLOCK_TO_KIND = { CHARACTER: 'chars', 'AI CHARACTER': 'chars', YOU: 'users
 const KIND_TO_BLOCK = { chars: 'CHARACTER', users: 'YOU', situations: 'SITUATION' };
 const KIND_LABEL = { chars: 'AI character', users: 'Your character', situations: 'Situation' };
 const FIELD_LABELS = {
-  chars: [['name', 'Name'], ['description', 'Description']],
-  users: [['name', 'Name'], ['description', 'Description']],
+  chars: [['name', 'Name'], ['description', 'Description'], ['appearance', 'Appearance']],
+  users: [['name', 'Name'], ['description', 'Description'], ['appearance', 'Appearance']],
   situations: [['name', 'Name'], ['situation', 'Situation'], ['openingMessage', 'Opening message']],
 };
 

@@ -57,6 +57,11 @@ Tap **Test Worker**. It should say "Connected to your Worker. Pod: off."
 - The main screen also shows your **Runpod balance** and roughly how many hours of chat it covers.
   Set the low-balance warning in the app's Settings → Pod control (0 turns it off).
 
+## Pictures
+If the app has an image model link (Settings → Pictures), the Worker starts the pod with that model loaded
+next to the chat model (KoboldCpp's `--sdmodel`). It adds about 7GB to download (1–2 more minutes of
+"Waking up") and a slightly bigger disk. Changing the link takes effect the next time you start the pod.
+
 ## Updating the Worker
 When `worker/worker.js` changes: Worker → **Edit code** → select all, paste the new
 `worker/worker.js` → **Deploy**. Your settings, secrets and cron trigger stay as they are.

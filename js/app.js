@@ -2,9 +2,10 @@
 // Screens: chat list → chat → settings. Data lives only on this device (IndexedDB).
 
 import * as store from './store.js';
-import { DEFAULT_SETTINGS, EXAMPLE_CHAT, SETTINGS_VERSION } from './defaults.js';
-import { streamChat, abortGeneration, testConnection, ApiError } from './api.js';
-import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs, trimIncomplete, castOf, isGroup, castNames, speakerOf, splitSpeaker } from './prompt.js';
+import { DEFAULT_SETTINGS, EXAMPLE_CHAT, SETTINGS_VERSION, CREATOR_FORMAT_V3, CREATOR_FORMAT_V4 } from './defaults.js';
+import { streamChat, abortGeneration, testConnection, ApiError, txt2img } from './api.js';
+import { getImage, cachedImage, putImage, persistImages, cleanupImages, imageIdsOf, toJpeg, shareImage } from './images.js';
+import { buildRequest, systemPrompt, textOf, tidy, fill, paragraphs, cutParagraphs, trimIncomplete, castOf, isGroup, castNames, speakerOf, splitSpeaker, buildImagePrompt, cleanImagePrompt } from './prompt.js';
 import { initCreator, renderCreator, scrollCreatorToBottom } from './creator.js';
 import { parseImport } from './importer.js';
 import { podControlEnabled, getStatus, startPod, stopPod, keepAlive, recordSession, monthTotal, fmtDuration } from './pod.js';
@@ -14,7 +15,7 @@ import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 9; // bump with CACHE in sw.js on each update
+const APP_VERSION = 10; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -48,6 +49,10 @@ async function loadAll() {
   }
   // v3: the token limit is now only a safety net (it was cutting replies off mid-sentence).
   if (oldVersion < 3 && [200, 300].includes(saved.maxReplyTokens)) settings.maxReplyTokens = 400;
+  // v4: add the Appearance field to the Creator's draft format (keeps any other edits you made).
+  if (oldVersion < 4 && (settings.creatorInstructions || '').includes(CREATOR_FORMAT_V3)) {
+    settings.creatorInstructions = settings.creatorInstructions.replace(CREATOR_FORMAT_V3, CREATOR_FORMAT_V4);
+  }
   if (oldVersion < SETTINGS_VERSION) {
     settings.settingsVersion = SETTINGS_VERSION;
     await saveSettings();
@@ -293,6 +298,8 @@ function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
       <div class="field"><label for="f-charDescription">Personality, background, how they talk</label>
         <textarea id="f-charDescription" rows="6">${v('charDescription')}</textarea>
         <p class="hint">A couple of example lines in their voice help a lot.</p></div>
+      <div class="field"><label for="f-charAppearance">Appearance (optional)</label>
+        <textarea id="f-charAppearance" rows="2" placeholder="Hair, build, age, usual clothes">${v('charAppearance')}</textarea></div>
       <div id="extra-chars">${extras.map((x, i) => extraCharHtml(x, i)).join('')}</div>
       <button class="btn-secondary small" type="button" id="add-char">+ Add another character</button>
       <p class="hint" style="margin-top:6px">For a group scene. The same model plays everyone, so there's no extra cost; replies just start a little slower.</p>
@@ -302,6 +309,7 @@ function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
       ${library.pickerHtml('users', picks.users, pickLabel)}
       <div class="field"><label for="f-userName">Your name in the story</label><input id="f-userName" type="text" value="${v('userName')}" autocomplete="off"></div>
       <div class="field"><label for="f-userDescription">Who you are in the story (optional)</label><textarea id="f-userDescription" rows="3">${v('userDescription')}</textarea></div>
+      <div class="field"><label for="f-userAppearance">Your appearance (optional)</label><textarea id="f-userAppearance" rows="2" placeholder="Used when you're in a picture">${v('userAppearance')}</textarea></div>
     </div>
     <div class="group">
       <h2>Situation</h2>
@@ -326,6 +334,8 @@ function extraCharHtml(x, i) {
       <div class="field"><label for="xn-${k}">Name</label><input id="xn-${k}" class="x-name" type="text" value="${escapeHtml(x.name || '')}" autocomplete="off"></div>
       <div class="field"><label for="xd-${k}">Personality, background, how they talk</label>
         <textarea id="xd-${k}" class="x-desc" rows="5">${escapeHtml(x.description || '')}</textarea></div>
+      <div class="field"><label for="xa-${k}">Appearance (optional)</label>
+        <textarea id="xa-${k}" class="x-appear" rows="2" placeholder="Hair, build, age, usual clothes">${escapeHtml(x.appearance || '')}</textarea></div>
     </div>`;
 }
 
@@ -365,6 +375,7 @@ function wireExtras(root, state) {
     if (item) {
       $('.x-name', block).value = item.name || '';
       $('.x-desc', block).value = item.description || '';
+      $('.x-appear', block).value = item.appearance || '';
     }
   });
 }
@@ -379,6 +390,7 @@ function readExtras(root, state) {
       photo: st.charId ? st.photo || '' : '',
       name: $('.x-name', b).value.trim(),
       description: $('.x-desc', b).value.trim(),
+      appearance: $('.x-appear', b).value.trim(),
     };
   }).filter((x) => x.name);
 }
@@ -388,15 +400,16 @@ function linkExtrasToLibrary(chat, { update = false } = {}) {
   for (const x of chat.extraChars || []) {
     const item = library.find('chars', x.charId);
     if (item) {
-      if (update) library.updateItem('chars', item.id, { name: x.name, description: x.description });
+      if (update) library.updateItem('chars', item.id, { name: x.name, description: x.description, appearance: x.appearance || '' });
       continue;
     }
-    const same = library.sameAs('chars', { charName: x.name, charDescription: x.description });
-    x.charId = (same || library.addItem('chars', { name: x.name, description: x.description, photo: '' })).id;
+    const same = library.sameAs('chars', { charName: x.name, charDescription: x.description, charAppearance: x.appearance });
+    x.charId = (same || library.addItem('chars', { name: x.name, description: x.description, appearance: x.appearance || '', photo: '' })).id;
   }
 }
 
-const FIELD_KEYS = ['charName', 'charDescription', 'userName', 'userDescription', 'situation', 'openingMessage'];
+const FIELD_KEYS = ['charName', 'charDescription', 'charAppearance', 'userName', 'userDescription', 'userAppearance', 'situation', 'openingMessage'];
+const SETTINGS_FIELD_KEYS = ['charName', 'charDescription', 'charAppearance', 'userName', 'userDescription', 'userAppearance', 'situation', 'chatInstructions', 'narratorInstructions', 'useGlobal'];
 function readFields(root, keys) {
   const out = {};
   for (const k of keys) {
@@ -537,11 +550,17 @@ function renderMessages() {
     msgs.forEach((m, i) => { if (m.role === 'char') lastCharIndex = i; });
     box.innerHTML = msgs.map((m, i) => messageHtml(m, i === lastCharIndex && i === msgs.length - 1)).join('');
   }
-  $('#regenerate-label').textContent = lastMessage()?.role === 'char' ? 'Regenerate' : 'Reply';
+  const regen = lastMessage()?.role === 'char';
+  const rb = $('#regenerate');
+  rb.classList.toggle('reply-mode', !regen);
+  rb.setAttribute('aria-label', regen ? 'Regenerate' : 'Reply');
+  rb.title = regen ? 'Regenerate the last reply' : 'Reply';
+  $('#picture').hidden = !picturesOn();
   $('#delete-last').disabled = !msgs.length;
 }
 
 function messageHtml(m, isLatestChar) {
+  if (m.role === 'image') return pictureHtml(m);
   const streaming = gen && gen.msgId === m.id;
   const body = renderText(textOf(m));
   let swipes = '';
@@ -676,7 +695,11 @@ $('#messages').addEventListener('click', (e) => {
     if (longPressed || !wasTarget || gen) return;
     const dx = e.clientX - startX, dy = e.clientY - startY;
     // A simple tap opens the message for editing.
-    if (Math.abs(dx) < 10 && Math.abs(dy) < 10) { startInlineEdit(wasTarget.dataset.id); return; }
+    if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+      if (wasTarget.classList.contains('image')) openViewer(wasTarget.dataset.id);
+      else startInlineEdit(wasTarget.dataset.id);
+      return;
+    }
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       const m = current.messages.find((x) => x.id === wasTarget.dataset.id);
       if (m && m === lastMessage() && m.role === 'char') swipe(m, dx < 0 ? 1 : -1);
@@ -699,6 +722,7 @@ function messageMenu(id) {
   const i = current.messages.findIndex((m) => m.id === id);
   if (i < 0) return;
   const m = current.messages[i];
+  if (m.role === 'image') return pictureMenu(m);
   const isLast = i === current.messages.length - 1;
   const s = openSheet({
     title: m.role === 'user' ? 'Your message' : m.role === 'narrator' ? 'Narration' : speakerOf(current, m).name + "'s message",
@@ -706,6 +730,7 @@ function messageMenu(id) {
       <li><button data-act="edit">Edit</button></li>
       <li><button data-act="copy">Copy text</button></li>
       ${m.role !== 'user' && isLast ? '<li><button data-act="regen">Regenerate</button></li>' : ''}
+      ${picturesOn() ? '<li><button data-act="picture">Picture this moment</button></li>' : ''}
       <li><button data-act="delete" class="danger">Delete this message</button></li>
       ${!isLast ? '<li><button data-act="delete-after" class="danger">Delete this and everything after</button></li>' : ''}
     </ul>`,
@@ -717,6 +742,7 @@ function messageMenu(id) {
     if (act === 'edit') startInlineEdit(m.id);
     if (act === 'copy') { try { await navigator.clipboard.writeText(textOf(m)); toast('Copied.'); } catch { toast("Couldn't copy."); } }
     if (act === 'regen') generate(m.role === 'narrator' ? 'renarrate' : 'regenerate');
+    if (act === 'picture') makePicture(i);
     if (act === 'delete') { current.messages.splice(i, 1); saveChat(current); renderMessages(); }
     if (act === 'delete-after') { current.messages.splice(i); saveChat(current); renderMessages(); }
   });
@@ -921,12 +947,18 @@ async function stopGenerating() {
 /**
  * mode: 'reply' | 'regenerate' | 'narrate' | 'renarrate' | 'writeForMe'
  */
-async function generate(mode, opts = {}) {
-  if (gen || !current) return;
+// With pod control, the pod has to be ready before anything is generated.
+function podNotReady() {
   if (podControlEnabled(settings) && !podState?.ready) {
     toast(podState ? 'The pod is still waking up. Try again in a moment.' : 'The pod is off. Tap Start in the banner above.');
-    return;
+    return true;
   }
+  return false;
+}
+
+async function generate(mode, opts = {}) {
+  if (gen || !current) return;
+  if (podNotReady()) return;
   const chat = current;
   const msgs = chat.messages;
   let target = null;       // message being written into
@@ -934,6 +966,7 @@ async function generate(mode, opts = {}) {
   let apiMode = mode;
 
   const group = isGroup(chat);
+  if ((mode === 'regenerate' || mode === 'renarrate') && msgs[msgs.length - 1]?.role === 'image') mode = 'reply';
   if (mode === 'regenerate' || mode === 'renarrate') {
     target = msgs[msgs.length - 1];
     if (!target || target.role === 'user') return generate('reply');
@@ -1030,6 +1063,229 @@ async function generate(mode, opts = {}) {
   if (mode === 'narrate' && text && chat.auto !== false && current === chat) generate('reply');
 }
 
+// ---------- Pictures ----------
+// Tap the picture button (or long-press a message → "Picture this moment"): the chat model
+// describes the moment, then the image model on the pod draws it. Pictures are shown in the
+// chat but never sent to the chat model.
+const picturesOn = () => !!(settings.imageModelUrl || '').trim();
+
+function pictureHtml(m) {
+  const working = gen && gen.msgId === m.id;
+  const id = (m.images || [])[m.ii ?? 0];
+  const src = id && cachedImage(id);
+  const w = Number(settings.imageWidth) || 832, h = Number(settings.imageHeight) || 1216;
+  let inner;
+  if (working && !id) inner = `<div class="pic-wait"><span class="spinner"></span>${gen.stage === 'image' ? 'Drawing…' : 'Imagining the scene…'}</div>`;
+  else if (src) inner = `<img src="${src}" alt="Picture of the scene">`;
+  else if (id) { inner = `<img data-img="${escapeHtml(id)}" alt="Picture of the scene">`; loadPicture(id); }
+  else inner = '<div class="pic-wait">No picture</div>';
+  const n = (m.images || []).length;
+  const tools = n > 1 || (working && id)
+    ? `<div class="msg-tools"><span class="swipes">
+        <button data-pic-swipe="-1" aria-label="Previous picture"${working ? ' disabled' : ''}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <span>${working ? 'Drawing…' : `${(m.ii ?? 0) + 1} / ${n}`}</span>
+        <button data-pic-swipe="1" aria-label="Next picture"${working ? ' disabled' : ''}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
+      </span></div>` : '';
+  return `<div class="msg image" data-id="${m.id}"><div class="pic-frame" style="aspect-ratio:${w}/${h}">${inner}</div>${tools}</div>`;
+}
+
+async function loadPicture(id) {
+  const src = await getImage(id);
+  for (const img of document.querySelectorAll(`img[data-img="${CSS.escape(id)}"]`)) {
+    if (src) { img.src = src; img.removeAttribute('data-img'); } else img.replaceWith(Object.assign(document.createElement('div'), { className: 'pic-wait', textContent: 'Picture not found' }));
+  }
+}
+
+// Draws one picture from a description and adds it to the message as a new version.
+async function drawPicture(chat, m, signal) {
+  const b64 = await txt2img(apiSettings(), {
+    prompt: [m.prompt, settings.imageStyle].filter((x) => (x || '').trim()).join(', '),
+    negative_prompt: settings.imageNegative || '',
+    width: Number(settings.imageWidth) || 832,
+    height: Number(settings.imageHeight) || 1216,
+    steps: Number(settings.imageSteps) || 30,
+    cfg_scale: Number(settings.imageCfg) || 5,
+    sampler_name: settings.imageSampler || 'DPM++ 2M Karras',
+    seed: -1,
+    n_iter: 1,
+    batch_size: 1,
+  }, { signal });
+  const jpeg = await toJpeg(b64);
+  const id = uid();
+  await putImage(id, jpeg, chat.save !== false);
+  m.images = [...(m.images || []), id];
+  m.ii = m.images.length - 1;
+}
+
+// index: the picture shows the story up to and including this message (default: the latest).
+async function makePicture(index) {
+  if (gen || !current) return;
+  if (!picturesOn()) { toast('Pictures are off. Add an image model link in Settings → Pictures.'); return; }
+  if (podNotReady()) return;
+  const chat = current;
+  const at = index ?? chat.messages.length - 1;
+  const history = chat.messages.slice(0, at + 1).filter((m) => m.role !== 'image');
+  if (!history.some((m) => textOf(m).trim())) { toast('Write a little of the story first.'); return; }
+  const m = { id: uid(), role: 'image', versions: [''], vi: 0, images: [], ii: 0, prompt: '', ts: Date.now() };
+  chat.messages.splice(at + 1, 0, m);
+  const controller = new AbortController();
+  gen = { controller, mode: 'picture', chatId: chat.id, msgId: m.id, stage: 'prompt' };
+  setGenerating(true);
+  const atEnd = at + 1 === chat.messages.length - 1;
+  renderMessages();
+  if (atEnd) scrollToBottom(true);
+  try {
+    // 1) The chat model describes the moment (assistant mode: steadier settings, short).
+    const s = apiSettings();
+    const { text } = await streamChat({ ...s, temperature: Math.min(Number(s.temperature) || 0.7, 0.7), xtcProbability: 0, dryMultiplier: 0, maxReplyTokens: 220 },
+      buildImagePrompt(chat, settings, history), { signal: controller.signal });
+    if (controller.signal.aborted) throw new ApiError('Stopped.', 'aborted');
+    m.prompt = cleanImagePrompt(text);
+    if (!m.prompt) throw new Error("The model didn't describe the scene. Try again.");
+    // 2) The image model draws it.
+    gen.stage = 'image';
+    if (current === chat) renderMessages();
+    await drawPicture(chat, m, controller.signal);
+  } catch (e) {
+    if (!(e instanceof ApiError && e.kind === 'aborted')) toast(e.message || "Couldn't make the picture.", 6000);
+  }
+  if (!m.images.length) chat.messages.splice(chat.messages.indexOf(m), 1);
+  gen = null;
+  setGenerating(false);
+  saveChat(chat);
+  if (current === chat) { renderMessages(); if (atEnd) scrollToBottom(true); }
+}
+
+// Another version of a picture (same description, new random seed), or after editing the description.
+async function redrawPicture(m) {
+  if (gen || !current) return;
+  if (podNotReady()) return;
+  const chat = current;
+  const controller = new AbortController();
+  gen = { controller, mode: 'picture', chatId: chat.id, msgId: m.id, stage: 'image' };
+  setGenerating(true);
+  renderMessages();
+  try {
+    await drawPicture(chat, m, controller.signal);
+  } catch (e) {
+    if (!(e instanceof ApiError && e.kind === 'aborted')) toast(e.message || "Couldn't make the picture.", 6000);
+  }
+  gen = null;
+  setGenerating(false);
+  saveChat(chat);
+  if (current === chat) renderMessages();
+}
+
+function swipePicture(m, dir) {
+  const n = (m.images || []).length;
+  const next = (m.ii ?? 0) + dir;
+  if (next >= n) { redrawPicture(m); return; }
+  if (next < 0) return;
+  m.ii = next;
+  saveChat(current);
+  renderMessages();
+}
+$('#messages').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-pic-swipe]');
+  if (!b || gen) return;
+  const m = current.messages.find((x) => x.id === b.closest('.msg').dataset.id);
+  if (m) swipePicture(m, Number(b.dataset.picSwipe));
+});
+
+function deletePicture(m) {
+  const chat = current;
+  const i = chat.messages.indexOf(m);
+  if (i < 0) return;
+  chat.messages.splice(i, 1);
+  saveChat(chat);
+  renderMessages();
+  toast('Picture deleted.', 5000, { label: 'Undo', onClick: () => { chat.messages.splice(i, 0, m); saveChat(chat); if (current === chat) renderMessages(); } });
+}
+
+async function savePicture(m) {
+  const id = (m.images || [])[m.ii ?? 0];
+  const src = id && (await getImage(id));
+  if (!src) { toast("Couldn't find that picture."); return; }
+  try {
+    const r = await shareImage(src, `${chatTitle(current).replace(/[^\w -]+/g, '')} ${new Date(m.ts).toISOString().slice(0, 10)}.jpg`);
+    if (r === 'downloaded') toast('Picture downloaded.');
+  } catch { toast("Couldn't save the picture."); }
+}
+
+function editPictureSheet(m) {
+  const s = openSheet({
+    title: 'Picture description',
+    body: `<div class="field"><label for="pic-prompt">What the picture shows</label>
+        <textarea id="pic-prompt" rows="7">${escapeHtml(m.prompt || '')}</textarea>
+        <p class="hint">Written by the model from the story. Edit it and redraw. The photo style from Settings → Pictures is added after it.</p></div>`,
+    actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="pic-redraw">Redraw</button>',
+  });
+  $('#pic-redraw', s.el).addEventListener('click', () => {
+    const t = $('#pic-prompt', s.el).value.trim();
+    if (!t) { toast('Describe the picture first.'); return; }
+    m.prompt = t;
+    s.close();
+    redrawPicture(m);
+  });
+}
+
+function pictureMenu(m) {
+  const s = openSheet({
+    title: 'Picture',
+    body: `<ul class="menu">
+      <li><button data-act="view">View</button></li>
+      <li><button data-act="save">Save to Photos</button></li>
+      <li><button data-act="again">New version</button></li>
+      <li><button data-act="edit">Edit description and redraw</button></li>
+      <li><button data-act="delete" class="danger">Delete picture</button></li>
+    </ul>`,
+  });
+  s.el.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (!act) return;
+    s.close();
+    if (act === 'view') openViewer(m.id);
+    if (act === 'save') savePicture(m);
+    if (act === 'again') redrawPicture(m);
+    if (act === 'edit') editPictureSheet(m);
+    if (act === 'delete') deletePicture(m);
+  });
+}
+
+// Full-screen view of a picture.
+async function openViewer(id) {
+  const m = current?.messages.find((x) => x.id === id);
+  if (!m || m.role !== 'image') return;
+  const imgId = (m.images || [])[m.ii ?? 0];
+  const src = imgId && (await getImage(imgId));
+  if (!src) return;
+  const v = document.createElement('div');
+  v.className = 'viewer';
+  v.setAttribute('role', 'dialog');
+  v.setAttribute('aria-label', 'Picture');
+  v.innerHTML = `<button class="viewer-close" data-v="close" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <img src="${src}" alt="Picture of the scene">
+    <div class="viewer-bar">
+      <button data-v="save">Save</button>
+      <button data-v="again">New version</button>
+      <button data-v="edit">Edit</button>
+      <button data-v="delete" class="danger">Delete</button>
+    </div>`;
+  document.body.appendChild(v);
+  v.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-v]')?.dataset.v;
+    if (!act && e.target.tagName === 'IMG') return;
+    v.remove();
+    if (act === 'save') savePicture(m);
+    if (act === 'again') redrawPicture(m);
+    if (act === 'edit') editPictureSheet(m);
+    if (act === 'delete') deletePicture(m);
+  });
+}
+
+$('#picture').addEventListener('click', () => makePicture());
+
 // ---------- Chat settings (⋯ or tap the name) ----------
 function chatSettingsSheet() {
   const c = current;
@@ -1068,7 +1324,7 @@ function chatSettingsSheet() {
   wireExtras(s.el, state);
 
   $('#view-prompt', s.el).addEventListener('click', () => {
-    const preview = { ...c, ...readFields(s.el, ['charName', 'charDescription', 'userName', 'userDescription', 'situation', 'chatInstructions', 'narratorInstructions', 'useGlobal']), extraChars: readExtras(s.el, state) };
+    const preview = { ...c, ...readFields(s.el, SETTINGS_FIELD_KEYS), extraChars: readExtras(s.el, state) };
     openSheet({ title: 'Full prompt', body: `<p class="hint">This is everything the model is told before the chat history. Nothing else is added except your "what happens next" direction.</p><pre class="prompt-view">${escapeHtml(systemPrompt(preview, settings))}</pre>` });
   });
 
@@ -1086,7 +1342,7 @@ function chatSettingsSheet() {
   });
 
   $('#save-chat-settings', s.el).addEventListener('click', async () => {
-    const f = readFields(s.el, ['charName', 'charDescription', 'userName', 'userDescription', 'situation', 'chatInstructions', 'narratorInstructions', 'useGlobal', 'save']);
+    const f = readFields(s.el, [...SETTINGS_FIELD_KEYS, 'save']);
     if (!f.charName.trim()) { toast('The character needs a name.'); return; }
     const wasSaved = c.save !== false;
     Object.assign(c, f);
@@ -1113,6 +1369,7 @@ function chatSettingsSheet() {
       linkExtrasToLibrary(c, { update: true });
     }
     if (wasSaved && !c.save) await store.del('chat:' + c.id);
+    if (!wasSaved && c.save) await persistImages(imageIdsOf(c));
     saveChat(c, { now: true });
     s.close();
     openChat(c);
@@ -1201,6 +1458,25 @@ function renderSettings() {
         <p class="hint">How the Creator (the ✦ Create screen) works with you. Your library's names are added after this.</p></div>
     </div>
     <div class="group">
+      <h2>Pictures</h2>
+      <div class="field"><label for="s-imageModelUrl">Image model link</label>
+        <input id="s-imageModelUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Empty = pictures off" value="${v('imageModelUrl')}">
+        <p class="hint">An SDXL .safetensors link, loaded on the pod next to the chat model (adds about 7GB and 1–2 minutes to start-up). Takes effect the next time you start the pod. Empty = pictures off.</p></div>
+      <div class="field"><label for="s-imageStyle">Photo style (added to every picture)</label>
+        <textarea id="s-imageStyle" rows="2">${v('imageStyle')}</textarea></div>
+      <div class="field"><label for="s-imageNegative">Avoid in pictures</label>
+        <textarea id="s-imageNegative" rows="3">${v('imageNegative')}</textarea></div>
+      <div class="grid2">
+        <div class="field"><label for="s-imageWidth">Width</label><input id="s-imageWidth" type="number" inputmode="numeric" step="64" value="${v('imageWidth')}"></div>
+        <div class="field"><label for="s-imageHeight">Height</label><input id="s-imageHeight" type="number" inputmode="numeric" step="64" value="${v('imageHeight')}"></div>
+        <div class="field"><label for="s-imageSteps">Steps</label><input id="s-imageSteps" type="number" inputmode="numeric" value="${v('imageSteps')}"><p class="hint">More = slower, a bit more detail.</p></div>
+        <div class="field"><label for="s-imageCfg">Guidance (CFG)</label><input id="s-imageCfg" type="number" inputmode="decimal" step="any" value="${v('imageCfg')}"><p class="hint">How strictly it follows the description.</p></div>
+      </div>
+      <div class="field"><label for="s-imageSampler">Sampler</label>
+        <input id="s-imageSampler" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${v('imageSampler')}"></div>
+      <p class="hint">Portrait 832 × 1216 and landscape 1216 × 832 suit SDXL best.</p>
+    </div>
+    <div class="group">
       <h2>Banned phrases</h2>
       <div class="field"><label for="s-bannedPhrases" class="sr-only">Banned phrases</label>
         <textarea id="s-bannedPhrases" rows="8" autocapitalize="off" spellcheck="false">${v('bannedPhrases')}</textarea>
@@ -1222,6 +1498,8 @@ function renderSettings() {
       <p class="hint" style="margin:0 0 10px">One file with your settings, characters and situations. Keep it somewhere safe, like iCloud Drive: iPhone can clear a web app's storage.</p>
       <div class="toggle-row"><div><div class="label">Include chats</div><div class="hint">Chats set to "don't save" are never included.</div></div>
         <input type="checkbox" id="b-chats" checked aria-label="Include chats"></div>
+      <div class="toggle-row"><div><div class="label">Include pictures</div><div class="hint">Pictures in those chats. Makes the file much bigger (about 0.3MB each).</div></div>
+        <input type="checkbox" id="b-pics" aria-label="Include pictures"></div>
       <div class="field" style="margin-top:12px"><label for="b-password">Password (optional)</label>
         <input id="b-password" type="password" autocomplete="new-password" placeholder="Leave empty for no password">
         <p class="hint">With a password, the file is encrypted and also keeps your pod address and password. Without one, those two are left out. There's no way to recover a forgotten password.</p></div>
@@ -1244,7 +1522,7 @@ function renderSettings() {
     st.className = 'status ' + (r.ok ? 'ok' : 'bad');
     st.textContent = r.message;
   };
-  $('#b-download').onclick = () => downloadBackup($('#b-chats').checked, $('#b-password').value);
+  $('#b-download').onclick = () => downloadBackup($('#b-chats').checked, $('#b-password').value, $('#b-pics').checked);
   $('#b-restore').onclick = () => $('#import-file').click();
 
   $('#test-worker').onclick = async () => {
@@ -1279,7 +1557,7 @@ function renderSettings() {
 $('#settings-back').addEventListener('click', () => (location.hash = '#/'));
 
 // ---------- Backup and restore ----------
-async function downloadBackup(includeChats, password) {
+async function downloadBackup(includeChats, password, includePictures = false) {
   const btn = $('#b-download');
   if (btn) btn.disabled = true;
   try {
@@ -1291,6 +1569,10 @@ async function downloadBackup(includeChats, password) {
       includePod: !!password,
       appVersion: APP_VERSION,
     });
+    if (includeChats && includePictures) {
+      data.images = {};
+      for (const c of data.chats) for (const id of imageIdsOf(c)) { const v = await getImage(id); if (v) data.images[id] = v; }
+    }
     if (password) data = await encryptBackup(data, password);
     const date = new Date().toISOString().slice(0, 10);
     const r = await saveFile(JSON.stringify(data), `companion-backup-${date}.json`);
@@ -1331,6 +1613,8 @@ function confirmRestore(b) {
     count((L.situations || []).length, 'situation', 'situations'),
     count((b.chats || []).length, 'chat', 'chats'),
   ];
+  const nPics = Object.keys(b.images || {}).length;
+  if (nPics) parts.push(count(nPics, 'picture', 'pictures'));
   const when = b.created ? new Date(b.created).toLocaleString() : 'an unknown date';
   const s = openSheet({
     title: 'Restore backup',
@@ -1349,6 +1633,9 @@ function confirmRestore(b) {
       }
       for (const kind of Object.keys(KINDS)) library.mergeItems(kind, L[kind]);
       await library.saveLibrary();
+      for (const [id, v] of Object.entries(b.images || {})) {
+        if (typeof v === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(v)) await putImage(id, v, true);
+      }
       for (const c of b.chats || []) {
         if (!c || !c.id || !Array.isArray(c.messages)) continue;
         c.save = true;
@@ -1611,6 +1898,8 @@ window.addEventListener('resize', fitToViewport);
   store.requestPersistence();
   spend = (await store.get('spend').catch(() => null)) || {};
   account = (await store.get('account').catch(() => null)) || null;
+  // Remove pictures from deleted messages and chats (kept until now so Undo works).
+  cleanupImages(new Set([...chats.values()].flatMap(imageIdsOf)));
   route();
   renderPod();
   await refreshPod();

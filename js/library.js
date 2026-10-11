@@ -15,8 +15,8 @@ export const KINDS = {
 
 // How a saved item maps onto a chat's fields.
 export const MAP = {
-  chars: { id: 'charId', fields: { name: 'charName', description: 'charDescription', photo: 'charPhoto' } },
-  users: { id: 'userCharId', fields: { name: 'userName', description: 'userDescription', photo: 'userPhoto' } },
+  chars: { id: 'charId', fields: { name: 'charName', description: 'charDescription', appearance: 'charAppearance', photo: 'charPhoto' } },
+  users: { id: 'userCharId', fields: { name: 'userName', description: 'userDescription', appearance: 'userAppearance', photo: 'userPhoto' } },
   situations: { id: 'situationId', fields: { situation: 'situation', openingMessage: 'openingMessage' } },
 };
 
@@ -30,7 +30,7 @@ export async function loadLibrary() {
     // First run: start with the example so the pickers have something in them.
     const now = Date.now();
     lib = {
-      chars: [{ id: uid(), name: EXAMPLE_CHAT.charName, description: EXAMPLE_CHAT.charDescription, photo: '', created: now, updated: now }],
+      chars: [{ id: uid(), name: EXAMPLE_CHAT.charName, description: EXAMPLE_CHAT.charDescription, appearance: EXAMPLE_CHAT.charAppearance, photo: '', created: now, updated: now }],
       users: [{ id: uid(), name: EXAMPLE_CHAT.userName, description: EXAMPLE_CHAT.userDescription, photo: '', created: now, updated: now }],
       situations: [{ id: uid(), name: 'Rainy café', situation: EXAMPLE_CHAT.situation, openingMessage: EXAMPLE_CHAT.openingMessage, created: now, updated: now }],
     };
@@ -210,7 +210,10 @@ export function editItemSheet(kind, item, { onSaved, prefill } = {}) {
       <div class="field"><label for="li-name">Name</label><input id="li-name" type="text" value="${v('name')}" autocomplete="off"></div>
       <div class="field"><label for="li-description">${kind === 'chars' ? 'Personality, background, how they talk' : 'Who you are in the story'}</label>
         <textarea id="li-description" rows="${kind === 'chars' ? 8 : 4}">${v('description')}</textarea>
-        ${kind === 'chars' ? '<p class="hint">A couple of example lines in their voice help a lot.</p>' : '<p class="hint">Appearance, relationship, history: whatever the character should know about you.</p>'}</div>`;
+        ${kind === 'chars' ? '<p class="hint">A couple of example lines in their voice help a lot.</p>' : '<p class="hint">Relationship, history: whatever the character should know about you.</p>'}</div>
+      <div class="field"><label for="li-appearance">Appearance (optional)</label>
+        <textarea id="li-appearance" rows="3" placeholder="e.g. late 20s, shoulder-length dark curly hair, freckles, slim, usually in a worn denim jacket">${v('appearance')}</textarea>
+        <p class="hint">Used in pictures and in the chat. Concrete details keep them looking the same.</p></div>`;
   }
   if (!isNew && !prefill && kind === 'chars') body += `<div class="group"><button class="btn-secondary wide" id="li-start">Start a chat with ${v('name')}</button></div>`;
   if (!isNew && !prefill) body += `<div class="group"><button class="btn-danger wide" id="li-delete">Delete from library</button>
@@ -261,6 +264,7 @@ export function editItemSheet(kind, item, { onSaved, prefill } = {}) {
       if (!data.situation && !data.openingMessage) { toast('Describe the situation first.'); return; }
     } else {
       data.description = $('#li-description', s.el).value.trim();
+      data.appearance = $('#li-appearance', s.el).value.trim();
       data.photo = photo;
       if (!data.name) { toast('Give them a name.'); return; }
     }
