@@ -56,7 +56,17 @@ function asList(data) {
 async function ourPods(env) {
   const r = await runpod(env, 'GET', '/pods');
   if (!r.ok) throw new Error(`Runpod: couldn't list pods (${r.status}) ${r.data?.detail || r.data?.title || ''}`);
-  return asList(r.data).filter((p) => (p.name || '').startsWith(POD_NAME) && !['TERMINATED'].includes(p.status));
+  return asList(r.data).filter((p) => isOurs(p) && !['TERMINATED'].includes(p.status));
+}
+
+// A pod counts as ours if it has our name OR runs the KoboldCpp image / has a model link set.
+// (Matching on the name alone meant a pod with any other name was never auto-stopped.)
+function isOurs(p) {
+  return (
+    (p.name || '').startsWith(POD_NAME) ||
+    /koboldcpp/i.test(p.image || '') ||
+    !!(p.env && (p.env.KCPP_MODEL || p.env.KCPP_ARGS))
+  );
 }
 
 // The pod's web address for port 5001 (Runpod's HTTPS proxy).
@@ -199,13 +209,24 @@ async function stop(env) {
 }
 
 // Runs every minute (cron trigger): the auto-off.
+// Every failure is logged (Worker -> Logs) and one pod's problem never stops the others from being checked.
 async function watchdog(env) {
-  const pods = await ourPods(env);
+  let pods;
+  try {
+    pods = await ourPods(env);
+  } catch (e) {
+    console.error('Auto-off FAILED: could not list pods: ' + (e.message || e));
+    throw e;
+  }
   for (const pod of pods) {
-    const d = await describe(env, pod);
-    if (d.shutdownInSec <= 0 || ['EXITED', 'ERROR'].includes(pod.status)) {
-      await terminate(env, pod.id);
-      console.log(`Auto-off: terminated ${pod.id} (${d.shutdownReason})`);
+    try {
+      const d = await describe(env, pod);
+      if (d.shutdownInSec <= 0 || ['EXITED', 'ERROR'].includes(pod.status)) {
+        await terminate(env, pod.id);
+        console.log(`Auto-off: terminated ${pod.id} (${d.shutdownReason})`);
+      }
+    } catch (e) {
+      console.error(`Auto-off FAILED for ${pod.id}: ${e.message || e}`);
     }
   }
 }

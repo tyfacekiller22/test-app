@@ -2116,7 +2116,12 @@ function renderChatBanner() {
   const left = liveShutdownIn();
   const showAutoOff = enabled && podState?.ready && left !== null && left <= 120;
   $('#autooff-banner').hidden = !showAutoOff;
-  if (showAutoOff) $('#autooff-text').textContent = `Auto-off in ${fmtDuration(left)}`;
+  if (showAutoOff) {
+    // "Keep on" only resets the idle timer. It can't extend the maximum session length.
+    const idle = podState.shutdownReason === 'idle';
+    $('#autooff-text').textContent = idle ? `Auto-off in ${fmtDuration(left)}` : `Time limit: pod stops in ${fmtDuration(left)}`;
+    $('#keep-on').hidden = !idle;
+  }
   const off = enabled && !podState?.ready;
   $('#pod-off-banner').hidden = !off;
   if (off) {
@@ -2163,9 +2168,9 @@ $('#keep-on').addEventListener('click', async () => {
   try {
     await keepAlive(podState.url, settings.password);
     await refreshPod();
-    toast('Keeping it on.');
-  } catch (_) {
-    toast("Couldn't reach the pod.");
+    toast('Keeping it on. Idle timer reset.');
+  } catch (e) {
+    toast("Couldn't reach the pod. " + (e.message || ''), 5000);
   }
 });
 

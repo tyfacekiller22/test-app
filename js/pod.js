@@ -40,11 +40,12 @@ export const startPod = (s) =>
 
 // Resets the pod's idle timer by asking for a 1-token reply (costs nothing extra).
 export async function keepAlive(podUrl, password) {
-  await fetch(podUrl.replace(/\/+$/, '') + '/v1/chat/completions', {
+  const res = await fetch(podUrl.replace(/\/+$/, '') + '/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + password },
     body: JSON.stringify({ messages: [{ role: 'user', content: 'ok' }], max_tokens: 1 }),
   });
+  if (!res.ok) throw new Error('The pod answered ' + res.status);
 }
 
 // ---------- Spending estimate (kept on this phone) ----------
