@@ -3,7 +3,7 @@
 // so editing a saved character later doesn't change old chats.
 
 import * as store from './store.js';
-import { $, uid, toast, openSheet, avatarHtml, safePhoto } from './ui.js';
+import { $, uid, toast, openSheet, avatarHtml, safePhoto, segHtml, wireSegs } from './ui.js';
 import { escapeHtml } from './format.js';
 import { EXAMPLE_CHAT } from './defaults.js';
 
@@ -17,7 +17,7 @@ export const KINDS = {
 export const MAP = {
   chars: { id: 'charId', fields: { name: 'charName', description: 'charDescription', appearance: 'charAppearance', photo: 'charPhoto' } },
   users: { id: 'userCharId', fields: { name: 'userName', description: 'userDescription', appearance: 'userAppearance', photo: 'userPhoto' } },
-  situations: { id: 'situationId', fields: { situation: 'situation', openingMessage: 'openingMessage' } },
+  situations: { id: 'situationId', fields: { situation: 'situation', openingMessage: 'openingMessage', openingFrom: 'openingFrom' } },
 };
 
 export let lib = { chars: [], users: [], situations: [] };
@@ -130,6 +130,10 @@ export async function resizePhoto(file, size = 256) {
   }
 }
 
+// "Who sends the opening message" switch (situations and New chat).
+export const openingFromHtml = (id, value) =>
+  segHtml(id, value, [['char', 'From the character'], ['user', 'From you']], 'Who sends the opening message');
+
 // ---------- Picker (used in New chat and Chat settings) ----------
 export function pickerHtml(kind, selectedId, label = 'Choose from your library') {
   const items = sorted(kind);
@@ -210,7 +214,10 @@ export function editItemSheet(kind, item, { onSaved, prefill } = {}) {
     body = `
       <div class="field"><label for="li-name">Name</label><input id="li-name" type="text" value="${v('name')}" placeholder="e.g. Rainy café" autocomplete="off"></div>
       <div class="field"><label for="li-situation">Setting and what's going on</label><textarea id="li-situation" rows="5">${v('situation')}</textarea></div>
-      <div class="field"><label for="li-openingMessage">Opening message from the character (optional)</label><textarea id="li-openingMessage" rows="3">${v('openingMessage')}</textarea></div>
+      <div class="field"><label for="li-openingMessage">Opening message (optional)</label>
+        ${openingFromHtml('li-openingFrom', it.openingFrom)}
+        <textarea id="li-openingMessage" rows="3">${v('openingMessage')}</textarea>
+        <p class="hint">If it's from you, the chat starts with your message and the character replies to it.</p></div>
       <p class="hint">Tip: write {{char}} and {{user}} to stand in for the two names.</p>`;
   } else {
     body = photoFieldHtml(it.name, photo) + `
@@ -231,6 +238,7 @@ export function editItemSheet(kind, item, { onSaved, prefill } = {}) {
     body,
     actions: '<button class="btn-secondary" data-close>Cancel</button><button class="btn-primary" id="li-save">Save</button>',
   });
+  wireSegs(s.el);
 
   const pick = $('#photo-pick', s.el);
   if (pick) {
@@ -288,6 +296,7 @@ export function editItemSheet(kind, item, { onSaved, prefill } = {}) {
     if (kind === 'situations') {
       data.situation = $('#li-situation', s.el).value.trim();
       data.openingMessage = $('#li-openingMessage', s.el).value.trim();
+      data.openingFrom = $('#li-openingFrom', s.el).value === 'user' ? 'user' : 'char';
       if (!data.name) data.name = situationTitle(data.situation);
       if (!data.situation && !data.openingMessage) { toast('Describe the situation first.'); return; }
     } else {

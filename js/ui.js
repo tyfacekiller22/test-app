@@ -90,3 +90,37 @@ export function onLongPress(root, selector, fn, ms = 480) {
   });
   return () => { const f = fired; fired = false; return f; };
 }
+
+// ---------- Two-way switch (segmented control) ----------
+// The value lives in a hidden input (id), so forms read and set it like any other field.
+// After setting the input's value in code, dispatch a 'sync' event on it to update the buttons.
+// options: [[value, label], ...]; the first option is the default.
+export function segHtml(id, value, options, label) {
+  const val = options.some(([v]) => v === value) ? value : options[0][0];
+  return `<input type="hidden" id="${id}" value="${escapeHtml(val)}">
+    <div class="seg seg-field" role="radiogroup" aria-label="${escapeHtml(label)}" data-seg-for="${id}">
+      ${options.map(([v, l]) => `<button type="button" role="radio" data-v="${escapeHtml(v)}" aria-checked="${v === val}" aria-selected="${v === val}">${escapeHtml(l)}</button>`).join('')}
+    </div>`;
+}
+export function wireSegs(root) {
+  for (const seg of root.querySelectorAll('[data-seg-for]')) {
+    const input = root.querySelector('#' + seg.dataset.segFor);
+    const buttons = [...seg.querySelectorAll('button[data-v]')];
+    const sync = () => {
+      if (!buttons.some((b) => b.dataset.v === input.value)) input.value = buttons[0].dataset.v;
+      for (const b of buttons) {
+        const on = String(b.dataset.v === input.value);
+        b.setAttribute('aria-checked', on);
+        b.setAttribute('aria-selected', on);
+      }
+    };
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-v]');
+      if (!b) return;
+      input.value = b.dataset.v;
+      sync();
+      input.dispatchEvent(new Event('change'));
+    });
+    input.addEventListener('sync', sync);
+  }
+}

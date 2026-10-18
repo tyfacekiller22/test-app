@@ -227,4 +227,5 @@ export const EXAMPLE_CHAT = {
   situation:
     'A rainy Saturday afternoon at a small café. Mara has claimed the corner table with a half-finished crossword. {{user}} has just arrived, late.',
   openingMessage: "*Mara doesn't look up from the crossword.* You're late. I was about to fill in 14-across without you.",
+  openingFrom: 'char',
 };

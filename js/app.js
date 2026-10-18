@@ -10,12 +10,12 @@ import { initCreator, renderCreator, scrollCreatorToBottom } from './creator.js'
 import { parseImport } from './importer.js';
 import { podControlEnabled, getStatus, startPod, stopPod, keepAlive, recordSession, monthTotal, fmtDuration } from './pod.js';
 import { renderText, escapeHtml, timeAgo } from './format.js';
-import { $, uid, toast, openSheet, avatarHtml, avatarInner, onLongPress } from './ui.js';
+import { $, uid, toast, openSheet, avatarHtml, avatarInner, onLongPress, wireSegs } from './ui.js';
 import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 19; // bump with CACHE in sw.js on each update
+const APP_VERSION = 20; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -325,7 +325,10 @@ function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
       <h2>Situation</h2>
       ${library.pickerHtml('situations', picks.situations, pickLabel)}
       <div class="field"><label for="f-situation">Setting and what's going on (optional)</label><textarea id="f-situation" rows="3">${v('situation')}</textarea></div>
-      ${opening ? `<div class="field"><label for="f-openingMessage">Opening message from the character (optional)</label><textarea id="f-openingMessage" rows="3">${v('openingMessage')}</textarea></div>` : ''}
+      ${opening ? `<div class="field"><label for="f-openingMessage">Opening message (optional)</label>
+        ${library.openingFromHtml('f-openingFrom', c.openingFrom)}
+        <textarea id="f-openingMessage" rows="3">${v('openingMessage')}</textarea>
+        <p class="hint">If it's from you, the chat starts with your message and the character replies to it.</p></div>` : ''}
     </div>
     <p class="hint">Tip: write {{char}} and {{user}} to stand in for the two names.</p>`;
 }
@@ -418,7 +421,7 @@ function linkExtrasToLibrary(chat, { update = false } = {}) {
   }
 }
 
-const FIELD_KEYS = ['charName', 'charDescription', 'charAppearance', 'userName', 'userDescription', 'userAppearance', 'situation', 'openingMessage'];
+const FIELD_KEYS = ['charName', 'charDescription', 'charAppearance', 'userName', 'userDescription', 'userAppearance', 'situation', 'openingMessage', 'openingFrom'];
 const SETTINGS_FIELD_KEYS = ['charName', 'charDescription', 'charAppearance', 'userName', 'userDescription', 'userAppearance', 'situation', 'chatInstructions', 'narratorInstructions', 'useGlobal'];
 function readFields(root, keys) {
   const out = {};
@@ -445,7 +448,7 @@ function wirePickers(root, state, { clearOnNone }) {
       if (!fields) return;
       for (const [k, val] of Object.entries(fields)) {
         const el = $('#f-' + k, root);
-        if (el) el.value = val;
+        if (el) { el.value = val; el.dispatchEvent(new Event('sync')); }
         if (k === 'charPhoto' || k === 'userPhoto') state.photos[k] = val;
       }
     });
@@ -482,15 +485,21 @@ function newChatSheet(pre = {}) {
     actions: '<button class="btn-primary" id="start-chat">Start chat</button>',
   });
   const state = { picks, photos, extras: {} };
+  wireSegs(s.el);
   wirePickers(s.el, state, { clearOnNone: true });
   wireExtras(s.el, state);
   $('#fill-example', s.el)?.addEventListener('click', () => {
-    for (const k of FIELD_KEYS) $('#f-' + k, s.el).value = EXAMPLE_CHAT[k];
+    for (const k of FIELD_KEYS) {
+      const el = $('#f-' + k, s.el);
+      el.value = EXAMPLE_CHAT[k] || '';
+      el.dispatchEvent(new Event('sync'));
+    }
   });
   $('#start-chat', s.el).addEventListener('click', () => {
     const f = readFields(s.el, FIELD_KEYS);
     if (!f.charName.trim()) { toast('Pick or write a character first.'); return; }
     if (!f.userName.trim()) f.userName = 'User';
+    f.openingFrom = f.openingFrom === 'user' ? 'user' : 'char';
     const chat = {
       v: 1,
       id: uid(),
@@ -514,6 +523,8 @@ function newChatSheet(pre = {}) {
     if ((chat.userCharId || '') !== (settings.lastUserCharId || '')) { settings.lastUserCharId = chat.userCharId || ''; saveSettings(); }
     if (f.openingMessage.trim()) {
       chat.messages.push(openingMessageFor(chat));
+      // Your opening line: the character answers it as soon as the chat opens (if Auto is on).
+      if (chat.openingFrom === 'user') replyOnOpen = chat.id;
     }
     chats.set(chat.id, chat);
     saveChat(chat, { now: true });
@@ -522,11 +533,13 @@ function newChatSheet(pre = {}) {
   });
 }
 
-// The situation's opening line, as the first character's message.
+// The situation's opening line: the first character's message, or yours (openingFrom 'user').
 function openingMessageFor(chat) {
   const text = fill((chat.openingMessage || '').trim(), chat, chat.charName);
+  if (chat.openingFrom === 'user') return { id: uid(), role: 'user', versions: [text], vi: 0, ts: Date.now() };
   return { id: uid(), role: 'char', speaker: 'main', speakerName: chat.charName, versions: [text], vi: 0, ts: Date.now() };
 }
+let replyOnOpen = null; // id of a just-started chat whose opening line is yours
 
 // ---------- Chat screen ----------
 // A chat keeps its own copy of each character, but if a character had no photo when the chat
@@ -558,6 +571,11 @@ function openChat(chat) {
   renderMessages();
   show('chat');
   scrollToBottom(true);
+  if (replyOnOpen === chat.id) {
+    replyOnOpen = null;
+    // If the pod isn't ready yet, the Reply button is there for when it is.
+    if (chat.auto !== false && !(podControlEnabled(settings) && !podState?.ready)) generate('reply');
+  }
 }
 
 function lastMessage() {
@@ -1599,7 +1617,7 @@ function chatSettingsSheet() {
           const data = library.fromChat(kind, c);
           if (kind === 'situations') delete data.name; // keep its short name
           else if (!data.photo) delete data.photo;    // don't wipe a saved photo
-          if (kind === 'situations') delete data.openingMessage;
+          if (kind === 'situations') { delete data.openingMessage; delete data.openingFrom; }
           library.updateItem(kind, id, data);
         } else {
           linkToLibrary(c, [kind]);

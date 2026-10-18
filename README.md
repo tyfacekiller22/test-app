@@ -4,7 +4,7 @@ A home-screen web app for chatting with the model running on your Runpod pod.
 Chats, characters, your pod address and password are stored only on your phone.
 
 ## What's in stage 1
-- Chat list, new chat (character, you, situation, opening message), example character (Mara)
+- Chat list, new chat (character, you, situation, opening message from the character or from you), example character (Mara)
 - Chat screen: live typing replies, Stop button, Auto switch, Write for me, Narrate
   (long-press Narrate to give it a focus), Regenerate / Reply, swipe between versions
 - "What happens next" box: stays active until you clear it, never shown in the chat
