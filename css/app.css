@@ -502,6 +502,12 @@ button:disabled { opacity: 0.45; cursor: default; }
 .creator-messages .bubble.typing::after { content: none; }
 .creator-messages .bubble.typing:not(:has(.cr-text:last-child))::after { content: '▍'; animation: blink 1s steps(1) infinite; color: var(--faint); }
 #view-creator .composer .input-row textarea { height: 76px; }
+/* While the keyboard is open, the home-bar padding under the composer is just empty
+   space (the keyboard covers the home bar). Give that space to the text box instead,
+   so the composer keeps the same height and the text box gets taller. */
+.keyboard-open .composer { padding-bottom: 8px; }
+.keyboard-open .input-row textarea { height: calc(104px + env(safe-area-inset-bottom)); }
+.keyboard-open #view-creator .composer .input-row textarea { height: calc(76px + env(safe-area-inset-bottom)); }
 
 /* Runpod balance on the pod card */
 .pod-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; }
