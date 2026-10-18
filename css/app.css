@@ -458,6 +458,11 @@ button:disabled { opacity: 0.45; cursor: default; }
 /* Extra characters in New chat / Chat settings */
 .extra-char { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px; }
 .extra-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.extra-btns { display: flex; align-items: center; gap: 14px; }
+.group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
+.group-head h2 { margin: 0; }
+.sync-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; font-weight: 600; padding: 4px 0; }
+.sync-btn.done { color: var(--muted); }
 .extra-title { font-size: 15px; font-weight: 600; }
 
 /* ---------- Creator ---------- */

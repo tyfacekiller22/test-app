@@ -15,7 +15,7 @@ import * as library from './library.js';
 import { lib, KINDS, MAP } from './library.js';
 import { isBackup, buildBackup, encryptBackup, decryptBackup, saveFile } from './backup.js';
 
-const APP_VERSION = 20; // bump with CACHE in sw.js on each update
+const APP_VERSION = 21; // bump with CACHE in sw.js on each update
 
 // ---------- State ----------
 let settings = { ...DEFAULT_SETTINGS };
@@ -297,12 +297,15 @@ function linkToLibrary(chat, kinds = ['chars', 'users', 'situations']) {
 
 // ---------- Chat setup fields (used by "New chat" and chat settings) ----------
 // picks: { chars, users, situations } = selected library ids (or '' for none).
-function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
+function chatFields(c, { picks = {}, opening = true, pickLabel, sync = false } = {}) {
   const v = (k) => escapeHtml(c[k] || '');
   const extras = c.extraChars || [];
+  const head = (kind, title, id = '') => sync
+    ? `<div class="group-head"><h2${id ? ` id="${id}"` : ''}>${title}</h2>${syncBtnHtml(`data-sync="${kind}"`, !!picks[kind])}</div>`
+    : `<h2${id ? ` id="${id}"` : ''}>${title}</h2>`;
   return `
     <div class="group" style="margin-top:4px">
-      <h2 id="chars-heading">${extras.length ? 'AI characters' : 'AI character'}</h2>
+      ${head('chars', extras.length ? 'AI characters' : 'AI character', 'chars-heading')}
       ${library.pickerHtml('chars', picks.chars, pickLabel)}
       <div class="field"><label for="f-charName">Name</label><input id="f-charName" type="text" value="${v('charName')}" autocomplete="off"></div>
       <div class="field"><label for="f-charDescription">Personality, background, how they talk</label>
@@ -310,19 +313,19 @@ function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
         <p class="hint">A couple of example lines in their voice help a lot.</p></div>
       <div class="field"><label for="f-charAppearance">Appearance (optional)</label>
         <textarea id="f-charAppearance" rows="2" placeholder="Hair, build, age, usual clothes">${v('charAppearance')}</textarea></div>
-      <div id="extra-chars">${extras.map((x, i) => extraCharHtml(x, i)).join('')}</div>
+      <div id="extra-chars">${extras.map((x, i) => extraCharHtml(x, i, sync)).join('')}</div>
       <button class="btn-secondary small" type="button" id="add-char">+ Add another character</button>
       <p class="hint" style="margin-top:6px">For a group scene. The same model plays everyone, so there's no extra cost; replies just start a little slower.</p>
     </div>
     <div class="group">
-      <h2>You</h2>
+      ${head('users', 'You')}
       ${library.pickerHtml('users', picks.users, pickLabel)}
       <div class="field"><label for="f-userName">Your name in the story</label><input id="f-userName" type="text" value="${v('userName')}" autocomplete="off"></div>
       <div class="field"><label for="f-userDescription">Who you are in the story (optional)</label><textarea id="f-userDescription" rows="3">${v('userDescription')}</textarea></div>
       <div class="field"><label for="f-userAppearance">Your appearance (optional)</label><textarea id="f-userAppearance" rows="2" placeholder="Used when you're in a picture">${v('userAppearance')}</textarea></div>
     </div>
     <div class="group">
-      <h2>Situation</h2>
+      ${head('situations', 'Situation')}
       ${library.pickerHtml('situations', picks.situations, pickLabel)}
       <div class="field"><label for="f-situation">Setting and what's going on (optional)</label><textarea id="f-situation" rows="3">${v('situation')}</textarea></div>
       ${opening ? `<div class="field"><label for="f-openingMessage">Opening message (optional)</label>
@@ -333,7 +336,13 @@ function chatFields(c, { picks = {}, opening = true, pickLabel } = {}) {
     <p class="hint">Tip: write {{char}} and {{user}} to stand in for the two names.</p>`;
 }
 // One extra character (group scenes) in the setup sheets.
-function extraCharHtml(x, i) {
+// Sync button: writes this chat's version to the library card (or adds a new card).
+function syncBtnHtml(attrs, linked) {
+  return `<button type="button" class="link-btn sync-btn" ${attrs}>
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/></svg>
+    <span>${linked ? 'Sync to library' : 'Save to library'}</span></button>`;
+}
+function extraCharHtml(x, i, sync = false) {
   const k = escapeHtml(x.key);
   const items = library.sorted('chars');
   const pick = items.length ? `<div class="field picker"><label for="xp-${k}">Choose from your library</label>
@@ -342,7 +351,8 @@ function extraCharHtml(x, i) {
       </select></div>` : '';
   return `<div class="extra-char" data-key="${k}">
       <div class="extra-head"><span class="extra-title">Character ${i + 2}</span>
-        <button type="button" class="link-btn danger" data-remove-char>Remove</button></div>
+        <span class="extra-btns">${sync ? syncBtnHtml('data-sync-extra', !!library.find('chars', x.charId)) : ''}
+        <button type="button" class="link-btn danger" data-remove-char>Remove</button></span></div>
       ${pick}
       <div class="field"><label for="xn-${k}">Name</label><input id="xn-${k}" class="x-name" type="text" value="${escapeHtml(x.name || '')}" autocomplete="off"></div>
       <div class="field"><label for="xd-${k}">Personality, background, how they talk</label>
@@ -364,7 +374,7 @@ function wireExtras(root, state) {
   $('#add-char', root).addEventListener('click', () => {
     const x = { key: uid(), name: '', description: '' };
     state.extras[x.key] = { charId: '', photo: '' };
-    box.insertAdjacentHTML('beforeend', extraCharHtml(x, box.children.length));
+    box.insertAdjacentHTML('beforeend', extraCharHtml(x, box.children.length, state.sync));
     renumber();
     const block = box.lastElementChild;
     ($('.x-pick', block) || $('.x-name', block)).focus();
@@ -1548,12 +1558,12 @@ function chatSettingsSheet() {
   const c = current;
   const picks = {};
   for (const kind of Object.keys(KINDS)) picks[kind] = library.find(kind, c[MAP[kind].id]) ? c[MAP[kind].id] : '';
-  const state = { picks, photos: { charPhoto: c.charPhoto || '', userPhoto: c.userPhoto || '' }, extras: {} };
+  const state = { picks, photos: { charPhoto: c.charPhoto || '', userPhoto: c.userPhoto || '' }, extras: {}, sync: true };
   for (const x of c.extraChars || []) state.extras[x.key] = { charId: x.charId || '', photo: x.photo || '' };
   const s = openSheet({
     title: 'Chat settings',
     body:
-      chatFields(c, { picks, opening: false, pickLabel: 'Swap in from your library' }) +
+      chatFields(c, { picks, opening: false, pickLabel: 'Swap in from your library', sync: true }) +
       `<div class="toggle-row"><div><div class="label">Also save these changes to my library</div><div class="hint">Off = changes apply to this chat only.</div></div>
         <input type="checkbox" id="f-updateLib" aria-label="Also save these changes to my library"></div>
       <div class="group">
@@ -1579,6 +1589,7 @@ function chatSettingsSheet() {
   });
   wirePickers(s.el, state, { clearOnNone: false });
   wireExtras(s.el, state);
+  wireSync(s.el, state, c);
 
   $('#view-prompt', s.el).addEventListener('click', () => {
     const preview = { ...c, ...readFields(s.el, SETTINGS_FIELD_KEYS), extraChars: readExtras(s.el, state) };
@@ -1632,6 +1643,130 @@ function chatSettingsSheet() {
     openChat(c);
   });
 }
+// ---------- Sync to library (chat settings) ----------
+// Writes what's in the form for one character / you / the situation to its library card
+// and to this chat, right away. A card that isn't in the library yet is added.
+// Situations keep their own name and opening message. Undo puts both back.
+function wireSync(root, state, chat) {
+  const markSynced = (btn) => { $('span', btn).textContent = 'Synced'; btn.classList.add('done'); };
+  // Re-enable a button once its section is edited again.
+  root.addEventListener('input', (e) => {
+    const sec = e.target.closest('.extra-char') || e.target.closest('.group');
+    const btn = sec && (sec.matches('.extra-char') ? $('[data-sync-extra]', sec) : $(':scope > .group-head [data-sync]', sec));
+    if (btn?.classList.contains('done')) { btn.classList.remove('done'); $('span', btn).textContent = 'Sync to library'; }
+  });
+  root.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-sync], [data-sync-extra]');
+    if (!btn) return;
+    if (btn.hasAttribute('data-sync')) syncMain(btn.dataset.sync, btn);
+    else syncExtra(btn.closest('.extra-char'), btn);
+  });
+
+  // Puts a newly added card in the section's library picker, selected.
+  const addOption = (sel, item) => {
+    if (!sel) return;
+    sel.insertAdjacentHTML('beforeend', `<option value="${item.id}">${escapeHtml(item.name || 'Untitled')}</option>`);
+    sel.value = item.id;
+  };
+  const renameOption = (opt, item) => { if (opt) opt.textContent = item.name || 'Untitled'; };
+  const undoToast = (msg, undo) => toast(msg, 6000, { label: 'Undo', onClick: () => {
+    undo();
+    library.saveLibrary();
+    saveChat(chat, { now: true });
+    if ($('#view-library') && !$('#view-library').hidden) library.renderLibrary();
+    if (current === chat) openChat(chat);
+    toast('Undone.');
+  } });
+
+  function syncMain(kind, btn) {
+    const keys = Object.values(MAP[kind].fields);
+    const f = readFields(root, keys); // only the fields shown in this sheet
+    const name = kind === 'chars' ? f.charName : kind === 'users' ? f.userName : '';
+    if (kind !== 'situations' && !name.trim()) { toast('Give them a name first.'); return; }
+    if (kind === 'situations' && !(f.situation || '').trim()) { toast('Describe the situation first.'); return; }
+    const data = library.fromChat(kind, { ...chat, ...f, charPhoto: state.photos.charPhoto, userPhoto: state.photos.userPhoto });
+    const idKey = MAP[kind].id;
+    const chatBefore = Object.fromEntries([...Object.keys(f), idKey].map((k) => [k, chat[k]]));
+    const existing = library.find(kind, state.picks[kind]);
+    let item, libUndo;
+    if (existing) {
+      if (kind === 'situations') { delete data.name; delete data.openingMessage; delete data.openingFrom; }
+      else if (!data.photo) delete data.photo; // don't wipe a saved photo
+      const before = { ...existing };
+      item = library.updateItem(kind, existing.id, data);
+      for (const o of root.querySelectorAll(`option[value="${item.id}"]`)) renameOption(o, item);
+      libUndo = () => {
+        for (const k of Object.keys(item)) delete item[k];
+        Object.assign(item, before);
+        for (const o of root.querySelectorAll(`option[value="${item.id}"]`)) renameOption(o, item);
+      };
+    } else {
+      item = library.addItem(kind, data);
+      state.picks[kind] = item.id;
+      addOption($('#p-' + kind, root), item);
+      libUndo = () => {
+        library.removeItem(kind, item.id);
+        if (state.picks[kind] === item.id) state.picks[kind] = '';
+        $(`#p-${kind} option[value="${item.id}"]`, root)?.remove();
+      };
+    }
+    Object.assign(chat, f, { [idKey]: item.id });
+    saveChat(chat, { now: true });
+    markSynced(btn);
+    if (current === chat) $('#chat-name').textContent = chatTitle(chat);
+    const label = kind === 'situations' ? `the "${item.name || 'Situation'}" situation` : `${item.name}'s card`;
+    undoToast(`${existing ? 'Updated' : 'Added'} ${label} in your library.`, () => {
+      libUndo();
+      Object.assign(chat, chatBefore);
+    });
+  }
+
+  function syncExtra(block, btn) {
+    const key = block.dataset.key;
+    const st = state.extras[key] || (state.extras[key] = {});
+    const data = {
+      name: $('.x-name', block).value.trim(),
+      description: $('.x-desc', block).value.trim(),
+      appearance: $('.x-appear', block).value.trim(),
+    };
+    if (!data.name) { toast('Give them a name first.'); return; }
+    const inChat = (chat.extraChars || []).find((x) => x.key === key);
+    const chatBefore = inChat ? { ...inChat } : null;
+    const existing = library.find('chars', st.charId);
+    let item, libUndo;
+    if (existing) {
+      const before = { ...existing };
+      item = library.updateItem('chars', existing.id, data);
+      // Renamed: update it in every picker in the sheet (main and extra characters).
+      for (const o of root.querySelectorAll(`option[value="${item.id}"]`)) renameOption(o, item);
+      libUndo = () => {
+        for (const k of Object.keys(item)) delete item[k];
+        Object.assign(item, before);
+        for (const o of root.querySelectorAll(`option[value="${item.id}"]`)) renameOption(o, item);
+      };
+    } else {
+      item = library.addItem('chars', { ...data, photo: '' });
+      const prev = st.charId || '';
+      st.charId = item.id;
+      st.photo = '';
+      addOption($('.x-pick', block), item);
+      libUndo = () => {
+        library.removeItem('chars', item.id);
+        if (st.charId === item.id) st.charId = prev;
+        $(`.x-pick option[value="${item.id}"]`, block)?.remove();
+      };
+    }
+    // Already part of the saved chat: update its copy too. (A block added just now joins on Save.)
+    if (inChat) Object.assign(inChat, data, { charId: item.id });
+    saveChat(chat, { now: true });
+    markSynced(btn);
+    undoToast(`${existing ? 'Updated' : 'Added'} ${item.name}'s card in your library.`, () => {
+      libUndo();
+      if (inChat) Object.assign(inChat, chatBefore);
+    });
+  }
+}
+
 // Clear conversation: delete every message (and the direction), keep the setup. Undo restores it.
 function clearConversation(chat) {
   const before = { messages: chat.messages, direction: chat.direction || '' };
