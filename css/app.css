@@ -61,6 +61,7 @@ html, body {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
 }
+html, body, button, input, textarea, select { touch-action: manipulation; }
 button { font: inherit; color: inherit; cursor: pointer; }
 input, textarea, select { font: inherit; color: var(--text); }
 [hidden] { display: none !important; }
