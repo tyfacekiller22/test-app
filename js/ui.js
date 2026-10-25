@@ -124,3 +124,58 @@ export function wireSegs(root) {
     input.addEventListener('sync', sync);
   }
 }
+
+// ---------- Full-screen profile pictures ----------
+// Tap a character's photo in the chat (top bar, or beside a name in group chats) or on the
+// character page to see it full screen. Tap anywhere, press ✕, or swipe down to close.
+function openPhoto(src) {
+  if (document.querySelector('.viewer.photo-viewer')) return;
+  const v = document.createElement('div');
+  v.className = 'viewer photo-viewer';
+  v.setAttribute('role', 'dialog');
+  v.setAttribute('aria-label', 'Photo');
+  v.innerHTML = `<div class="viewer-top">
+      <button class="viewer-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="viewer-stage"><img alt="" draggable="false"></div>`;
+  const img = v.querySelector('img');
+  img.src = src;
+  document.body.appendChild(v);
+  const close = () => v.remove();
+  v.querySelector('.viewer-close').addEventListener('click', close);
+  let sy = 0, dy = 0, dragging = false;
+  v.addEventListener('pointerdown', (e) => { dragging = true; sy = e.clientY; dy = 0; img.style.transition = 'none'; });
+  v.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    dy = e.clientY - sy;
+    if (dy > 0) {
+      img.style.transform = `translateY(${dy}px) scale(${Math.max(0.85, 1 - dy / 1500)})`;
+      v.style.background = `rgba(0,0,0,${Math.max(0.4, 1 - dy / 400)})`;
+    }
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    if (dy > 100) return close();
+    if (Math.abs(dy) < 8) return; // a plain tap: the click handler below closes it
+    img.style.transition = 'transform 0.18s ease-out';
+    img.style.transform = '';
+    v.style.background = '';
+  };
+  v.addEventListener('pointerup', end);
+  // Close on the click (not on pointerup) so the tap can't fall through onto the photo underneath.
+  v.addEventListener('click', () => { if (Math.abs(dy) < 8) close(); });
+  v.addEventListener('pointercancel', () => { dragging = false; img.style.transform = ''; v.style.background = ''; });
+}
+
+// Capture phase, so it wins over the button the photo sits inside (the chat title opens settings).
+document.addEventListener('click', (e) => {
+  const img = e.target.closest?.('.avatar img');
+  if (!img || !img.closest('.topbar, .speaker, #photo-preview')) return;
+  const src = safePhoto(img.getAttribute('src'));
+  if (!src) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openPhoto(src);
+}, true);
