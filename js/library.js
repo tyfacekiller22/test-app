@@ -113,8 +113,8 @@ export function sameAs(kind, chat) {
 }
 
 // ---------- Photos ----------
-// Shrinks a picked photo to a small square JPEG so it's cheap to store and back up.
-export async function resizePhoto(file, size = 256) {
+// Crops a picked or generated photo to a square JPEG (768px: sharp full screen, still cheap to store and back up).
+export async function resizePhoto(file, size = 768) {
   const url = URL.createObjectURL(file);
   try {
     const img = new Image();
@@ -122,9 +122,12 @@ export async function resizePhoto(file, size = 256) {
     await img.decode();
     const s = Math.min(img.naturalWidth, img.naturalHeight);
     const c = document.createElement('canvas');
-    c.width = c.height = size;
-    c.getContext('2d').drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
-    return c.toDataURL('image/jpeg', 0.85);
+    const out = Math.min(size, s); // never upscale a small picture
+    c.width = c.height = out;
+    const g = c.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, out, out);
+    return c.toDataURL('image/jpeg', 0.9);
   } finally {
     URL.revokeObjectURL(url);
   }
